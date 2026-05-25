@@ -2,6 +2,7 @@ import { AwsClient } from 'aws4fetch'
 
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const SIGN_PATH = '/api/sign'
+const REVOKE_PATH = '/api/revoke'
 const PASS_THROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
 const RANGE_RETRY_ATTEMPTS = 3
 
@@ -329,6 +330,24 @@ async function handleSign(request, env) {
   return jsonResponse({ url: `${origin}/s/${id}`, id, exp })
 }
 
+// ---- revoke ----
+async function handleRevoke(request, env) {
+  if (!(await authenticate(request, env))) return noStore(401, 'Unauthorized')
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'invalid json' }, 400)
+  }
+  if (typeof body.id !== 'string') return jsonResponse({ error: 'invalid id' }, 400)
+  try {
+    const res = await env.DB.prepare('DELETE FROM links WHERE id = ?').bind(body.id).run()
+    return jsonResponse({ deleted: res.meta.changes > 0 })
+  } catch {
+    return noStore(503, 'Service Unavailable')
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname
@@ -336,6 +355,11 @@ export default {
     if (path === SIGN_PATH) {
       if (request.method !== 'POST') return noStore(405, 'Method Not Allowed')
       return handleSign(request, env)
+    }
+
+    if (path === REVOKE_PATH) {
+      if (request.method !== 'POST') return noStore(405, 'Method Not Allowed')
+      return handleRevoke(request, env)
     }
 
     const m = path.match(ID_ROUTE)
