@@ -16,7 +16,7 @@ TOKEN_ID_LENGTH = "16"
 [[d1_databases]]
 binding = "DB"
 database_name = "cdn-links"
-database_id = "<run: wrangler d1 create cdn-links, paste id>"
+database_id = "56a462e7-af43-426b-8693-88a9d83a90f6"
 migrations_dir = "migrations"
 
 # Expired-row cleanup. Lazy deletion happens on access; this daily sweep removes
