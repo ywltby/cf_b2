@@ -9,7 +9,9 @@ export async function resetDb() {
 
 // key 传规范化后的对象 key（无前导斜杠）
 export async function insertLink(id, bucketId, key, exp) {
-  await env.DB.prepare('INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)')
+  await env.DB.prepare(
+    'INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)',
+  )
     .bind(id, bucketId, key, exp)
     .run()
 }

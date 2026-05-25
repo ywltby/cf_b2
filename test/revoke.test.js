@@ -3,7 +3,10 @@ import { expect, test, beforeEach } from 'vitest'
 import { resetDb, insertLink, FUTURE } from './helpers.js'
 
 beforeEach(resetDb)
-const AUTH = { 'content-type': 'application/json', authorization: 'Bearer test-admin-pass' }
+const AUTH = {
+  'content-type': 'application/json',
+  authorization: 'Bearer test-admin-pass',
+}
 
 test('revoke deletes the link; subsequent access 404', async () => {
   await insertLink('rev000000001', 'b2test', 'a.png', FUTURE)

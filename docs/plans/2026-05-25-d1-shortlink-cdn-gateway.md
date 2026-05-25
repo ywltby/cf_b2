@@ -14,19 +14,28 @@
 
 ### 配置项
 
-| 类型 | 名称 | 示例 / 说明 |
-|---|---|---|
-| secret | `BUCKETS` | JSON 数组，每元素 `{id,name,endpoint,region,keyId,applicationKey}`，`id` 为稳定唯一字符串 |
-| secret | `ADMIN_PASSWORD` | 签发/撤销 API 密码（长随机串，按 API key 对待） |
-| [vars] | `CACHE_TTL_SECONDS` | `"86400"` 文件响应 `max-age`（intVar 校验 0..31536000） |
-| [vars] | `TOKEN_TTL_SECONDS` | `"3600"` 短链默认有效期秒（intVar 校验 1..31536000） |
-| [vars] | `TOKEN_ID_LENGTH` | `"16"` 短 id 字符数（intVar 校验 **12..64**，下限 12≈72bit 熵，默认 16≈96bit） |
-| d1 | `DB` | `[[d1_databases]]` 绑定 |
+| 类型   | 名称                | 示例 / 说明                                                                               |
+| ------ | ------------------- | ----------------------------------------------------------------------------------------- |
+| secret | `BUCKETS`           | JSON 数组，每元素 `{id,name,endpoint,region,keyId,applicationKey}`，`id` 为稳定唯一字符串 |
+| secret | `ADMIN_PASSWORD`    | 签发/撤销 API 密码（长随机串，按 API key 对待）                                           |
+| [vars] | `CACHE_TTL_SECONDS` | `"86400"` 文件响应 `max-age`（intVar 校验 0..31536000）                                   |
+| [vars] | `TOKEN_TTL_SECONDS` | `"3600"` 短链默认有效期秒（intVar 校验 1..31536000）                                      |
+| [vars] | `TOKEN_ID_LENGTH`   | `"16"` 短 id 字符数（intVar 校验 **12..64**，下限 12≈72bit 熵，默认 16≈96bit）            |
+| d1     | `DB`                | `[[d1_databases]]` 绑定                                                                   |
 
 `BUCKETS` 示例：
 
 ```json
-[{"id":"b2main","name":"1145141919810","endpoint":"s3.us-west-004.backblazeb2.com","region":"us-west-004","keyId":"<key id>","applicationKey":"<application key>"}]
+[
+  {
+    "id": "b2main",
+    "name": "1145141919810",
+    "endpoint": "s3.us-west-004.backblazeb2.com",
+    "region": "us-west-004",
+    "keyId": "<key id>",
+    "applicationKey": "<application key>"
+  }
+]
 ```
 
 `endpoint` 可写：裸 host（默认补 `https://`，如 `s3.us-west-004.backblazeb2.com`）、`https://host:port`、或 `http://host:port`——**任意可连通的 S3 兼容端点都支持，含 http 与任意端口**。解析用 `new URL()`，必须是纯 origin（不含 path/query/userinfo）。⚠️ http 会以明文发送 SigV4 鉴权头与数据，仅在可信网络使用。
@@ -45,13 +54,13 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 ### 路由
 
-| 方法+路径 | 行为 |
-|---|---|
-| `POST /api/sign` | 管理员鉴权 → 生成短链 → 返回 `{url,id,exp}` |
-| `POST /api/revoke` | 管理员鉴权 → 删除某 id |
-| `GET\|HEAD /s/<id>` | 查 D1 → 流式交付 |
-| 已知路径用错方法 | `405` |
-| 其它任意路径 | `403` |
+| 方法+路径           | 行为                                        |
+| ------------------- | ------------------------------------------- |
+| `POST /api/sign`    | 管理员鉴权 → 生成短链 → 返回 `{url,id,exp}` |
+| `POST /api/revoke`  | 管理员鉴权 → 删除某 id                      |
+| `GET\|HEAD /s/<id>` | 查 D1 → 流式交付                            |
+| 已知路径用错方法    | `405`                                       |
+| 其它任意路径        | `403`                                       |
 
 ### 安全 / 行为铁律（每个任务都要守）
 
@@ -71,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 ## Task 1: 测试与配置脚手架
 
 **Files:**
+
 - Modify: `package.json`
 - Create: `vitest.config.js`
 - Create: `scripts/check-no-buffering.mjs`
@@ -121,11 +131,16 @@ const forbidden = [
 ]
 const hits = forbidden.filter((re) => re.test(src))
 if (hits.length) {
-  console.error('Streaming guard FAILED: index.js must not buffer upstream bodies:', hits.map(String))
+  console.error(
+    'Streaming guard FAILED: index.js must not buffer upstream bodies:',
+    hits.map(String),
+  )
   process.exit(1)
 }
 if (!/new Response\(\s*resp\.body/.test(src)) {
-  console.warn('Streaming guard WARN: streaming pattern new Response(resp.body, ...) not found')
+  console.warn(
+    'Streaming guard WARN: streaming pattern new Response(resp.body, ...) not found',
+  )
 }
 console.log('Streaming guard passed')
 ```
@@ -229,7 +244,9 @@ export async function resetDb() {
 
 // key 传规范化后的对象 key（无前导斜杠）
 export async function insertLink(id, bucketId, key, exp) {
-  await env.DB.prepare('INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)')
+  await env.DB.prepare(
+    'INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)',
+  )
     .bind(id, bucketId, key, exp)
     .run()
 }
@@ -243,7 +260,10 @@ export const PAST = Math.floor(Date.now() / 1000) - 10
 ```js
 export default {
   async fetch() {
-    return new Response(null, { status: 403, headers: { 'cache-control': 'no-store' } })
+    return new Response(null, {
+      status: 403,
+      headers: { 'cache-control': 'no-store' },
+    })
   },
 }
 ```
@@ -322,12 +342,18 @@ const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const SIGN_PATH = '/api/sign'
 
 function noStore(status, statusText) {
-  return new Response(null, { status, statusText, headers: { 'cache-control': 'no-store' } })
+  return new Response(null, {
+    status,
+    statusText,
+    headers: { 'cache-control': 'no-store' },
+  })
 }
 
 async function resolveLink(env, id) {
   // throws on D1 errors; caller maps to 503
-  return env.DB.prepare('SELECT bucket_id, p, exp FROM links WHERE id = ?').bind(id).first()
+  return env.DB.prepare('SELECT bucket_id, p, exp FROM links WHERE id = ?')
+    .bind(id)
+    .first()
 }
 
 // Best-effort delete that never blocks and never throws into the response path —
@@ -393,40 +419,70 @@ export default {
 **Step 1: `test/sign.test.js`**
 
 ```js
-import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
+import {
+  SELF,
+  env,
+  createExecutionContext,
+  waitOnExecutionContext,
+} from 'cloudflare:test'
 import worker from '../index.js'
 import { expect, test, beforeEach, describe } from 'vitest'
 import { resetDb } from './helpers.js'
 
 beforeEach(resetDb)
-const AUTH = { 'content-type': 'application/json', authorization: 'Bearer test-admin-pass' }
+const AUTH = {
+  'content-type': 'application/json',
+  authorization: 'Bearer test-admin-pass',
+}
 
 async function sign(body, headers = AUTH) {
   return SELF.fetch('https://cdn.example.com/api/sign', {
-    method: 'POST', headers, body: JSON.stringify(body),
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
   })
 }
 
 describe('POST /api/sign', () => {
   test('missing / wrong auth -> 401', async () => {
-    expect((await sign({ bucket: 'b2test', path: '/a.png' }, { 'content-type': 'application/json' })).status).toBe(401)
-    expect((await sign({ bucket: 'b2test', path: '/a.png' }, { 'content-type': 'application/json', authorization: 'Bearer nope' })).status).toBe(401)
+    expect(
+      (
+        await sign(
+          { bucket: 'b2test', path: '/a.png' },
+          { 'content-type': 'application/json' },
+        )
+      ).status,
+    ).toBe(401)
+    expect(
+      (
+        await sign(
+          { bucket: 'b2test', path: '/a.png' },
+          { 'content-type': 'application/json', authorization: 'Bearer nope' },
+        )
+      ).status,
+    ).toBe(401)
   })
 
   test('valid -> 200 with url/id/exp and a D1 row (normalized key, stable bucket id)', async () => {
     const res = await sign({ bucket: 'b2test', path: '/a.png' })
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.url).toMatch(/^https:\/\/cdn\.example\.com\/s\/[A-Za-z0-9_-]{12}$/)
+    expect(json.url).toMatch(
+      /^https:\/\/cdn\.example\.com\/s\/[A-Za-z0-9_-]{12}$/,
+    )
     expect(json.id).toHaveLength(12)
     expect(json.exp).toBeGreaterThan(Math.floor(Date.now() / 1000))
-    const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?').bind(json.id).first()
+    const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?')
+      .bind(json.id)
+      .first()
     expect(row).toMatchObject({ bucket_id: 'b2test', p: 'a.png' }) // 前导斜杠被规范化掉
   })
 
   test('expiresIn override honored', async () => {
     const before = Math.floor(Date.now() / 1000)
-    const { exp } = await (await sign({ bucket: 'b2test', path: '/a.png', expiresIn: 60 })).json()
+    const { exp } = await (
+      await sign({ bucket: 'b2test', path: '/a.png', expiresIn: 60 })
+    ).json()
     expect(exp).toBeGreaterThanOrEqual(before + 60)
     expect(exp).toBeLessThanOrEqual(before + 61)
   })
@@ -437,32 +493,55 @@ describe('POST /api/sign', () => {
   })
 
   test('invalid key -> 403', async () => {
-    for (const p of ['../etc', '/a/../b', '', '/', '/a/./b', '/a\\b', '/a//b']) {
+    for (const p of [
+      '../etc',
+      '/a/../b',
+      '',
+      '/',
+      '/a/./b',
+      '/a\\b',
+      '/a//b',
+    ]) {
       expect((await sign({ bucket: 'b2test', path: p })).status, p).toBe(403)
     }
   })
 
   test('literal %2e%2e is accepted as a literal key (not traversal)', async () => {
-    expect((await sign({ bucket: 'b2test', path: '/%2e%2e/x.png' })).status).toBe(200)
+    expect(
+      (await sign({ bucket: 'b2test', path: '/%2e%2e/x.png' })).status,
+    ).toBe(200)
   })
 
   test('invalid expiresIn -> 403', async () => {
     for (const e of [0, -1, 1.5, 'x', 31536001]) {
-      expect((await sign({ bucket: 'b2test', path: '/a.png', expiresIn: e })).status, String(e)).toBe(403)
+      expect(
+        (await sign({ bucket: 'b2test', path: '/a.png', expiresIn: e })).status,
+        String(e),
+      ).toBe(403)
     }
   })
 
   test('invalid json -> 400', async () => {
-    const res = await SELF.fetch('https://cdn.example.com/api/sign', { method: 'POST', headers: AUTH, body: 'not json' })
+    const res = await SELF.fetch('https://cdn.example.com/api/sign', {
+      method: 'POST',
+      headers: AUTH,
+      body: 'not json',
+    })
     expect(res.status).toBe(400)
   })
 
   test('disabled when ADMIN_PASSWORD unset -> 401', async () => {
     const ctx = createExecutionContext()
     const req = new Request('https://cdn.example.com/api/sign', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }),
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }),
     })
-    const res = await worker.fetch(req, { ...env, ADMIN_PASSWORD: undefined }, ctx)
+    const res = await worker.fetch(
+      req,
+      { ...env, ADMIN_PASSWORD: undefined },
+      ctx,
+    )
     await waitOnExecutionContext(ctx)
     expect(res.status).toBe(401)
   })
@@ -477,7 +556,11 @@ describe('POST /api/sign', () => {
     ]
     for (const BUCKETS of bad) {
       const ctx = createExecutionContext()
-      const req = new Request('https://cdn.example.com/api/sign', { method: 'POST', headers: AUTH, body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }) })
+      const req = new Request('https://cdn.example.com/api/sign', {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }),
+      })
       const res = await worker.fetch(req, { ...env, BUCKETS }, ctx)
       await waitOnExecutionContext(ctx)
       expect(res.status, BUCKETS).toBe(500)
@@ -493,7 +576,11 @@ describe('POST /api/sign', () => {
 ```js
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
-    status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    status,
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+    },
   })
 }
 
@@ -509,14 +596,17 @@ function intVar(env, name, def, min, max) {
 // compatible endpoint is allowed, http and any port included. NOTE: http sends the
 // SigV4 auth header + data in plaintext — document as trusted-network only.
 function parseEndpoint(endpoint) {
-  const e = /^https?:\/\//i.test(endpoint.trim()) ? endpoint.trim() : 'https://' + endpoint.trim()
+  const e = /^https?:\/\//i.test(endpoint.trim())
+    ? endpoint.trim()
+    : 'https://' + endpoint.trim()
   let u
   try {
     u = new URL(e)
   } catch {
     throw new Error('bucket endpoint invalid')
   }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('bucket endpoint scheme invalid')
+  if (u.protocol !== 'https:' && u.protocol !== 'http:')
+    throw new Error('bucket endpoint scheme invalid')
   if (u.pathname !== '/' || u.search || u.hash || u.username || u.password) {
     throw new Error('bucket endpoint must be origin only')
   }
@@ -531,19 +621,38 @@ function getBuckets(env) {
   if (!raw) throw new Error('BUCKETS not configured')
   if (raw !== _bucketsRaw) {
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('BUCKETS must be a non-empty array')
+    if (!Array.isArray(parsed) || parsed.length === 0)
+      throw new Error('BUCKETS must be a non-empty array')
     const byId = new Map()
     const idRe = /^[A-Za-z0-9_-]{1,64}$/
     for (const c of parsed) {
-      for (const f of ['id', 'name', 'endpoint', 'region', 'keyId', 'applicationKey']) {
-        if (typeof c?.[f] !== 'string' || c[f].length === 0 || c[f].length > 1024) {
+      for (const f of [
+        'id',
+        'name',
+        'endpoint',
+        'region',
+        'keyId',
+        'applicationKey',
+      ]) {
+        if (
+          typeof c?.[f] !== 'string' ||
+          c[f].length === 0 ||
+          c[f].length > 1024
+        ) {
           throw new Error(`bucket field invalid: ${f}`)
         }
       }
       if (!idRe.test(c.id)) throw new Error('bucket id charset invalid') // id flows into D1/logs/URLs
       const origin = parseEndpoint(c.endpoint) // throws on invalid scheme/host/port
       if (byId.has(c.id)) throw new Error('duplicate bucket id')
-      byId.set(c.id, { id: c.id, name: c.name, origin, region: c.region, keyId: c.keyId, applicationKey: c.applicationKey })
+      byId.set(c.id, {
+        id: c.id,
+        name: c.name,
+        origin,
+        region: c.region,
+        keyId: c.keyId,
+        applicationKey: c.applicationKey,
+      })
     }
     _bucketsById = byId
     _bucketsRaw = raw
@@ -583,14 +692,17 @@ async function timingSafeEqual(a, b) {
     crypto.subtle.digest('SHA-256', enc.encode(a)),
     crypto.subtle.digest('SHA-256', enc.encode(b)),
   ])
-  const va = new Uint8Array(ha), vb = new Uint8Array(hb)
+  const va = new Uint8Array(ha),
+    vb = new Uint8Array(hb)
   let diff = 0
   for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i]
   return diff === 0
 }
 async function authenticate(request, env) {
   if (!env.ADMIN_PASSWORD) return false
-  const m = (request.headers.get('authorization') || '').match(/^Bearer\s+(.+)$/)
+  const m = (request.headers.get('authorization') || '').match(
+    /^Bearer\s+(.+)$/,
+  )
   return m ? timingSafeEqual(m[1], env.ADMIN_PASSWORD) : false
 }
 
@@ -599,10 +711,18 @@ async function handleSign(request, env) {
   if (!(await authenticate(request, env))) return noStore(401, 'Unauthorized')
 
   let body
-  try { body = await request.json() } catch { return jsonResponse({ error: 'invalid json' }, 400) }
+  try {
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'invalid json' }, 400)
+  }
 
   let buckets
-  try { buckets = getBuckets(env) } catch { return jsonResponse({ error: 'server misconfigured' }, 500) }
+  try {
+    buckets = getBuckets(env)
+  } catch {
+    return jsonResponse({ error: 'server misconfigured' }, 500)
+  }
 
   if (typeof body.bucket !== 'string' || !buckets.has(body.bucket)) {
     return jsonResponse({ error: 'invalid bucket' }, 403)
@@ -612,7 +732,11 @@ async function handleSign(request, env) {
 
   let ttl = intVar(env, 'TOKEN_TTL_SECONDS', 3600, 1, 31536000)
   if (body.expiresIn !== undefined) {
-    if (!Number.isInteger(body.expiresIn) || body.expiresIn <= 0 || body.expiresIn > 31536000) {
+    if (
+      !Number.isInteger(body.expiresIn) ||
+      body.expiresIn <= 0 ||
+      body.expiresIn > 31536000
+    ) {
       return jsonResponse({ error: 'invalid expiresIn' }, 403)
     }
     ttl = body.expiresIn
@@ -624,8 +748,11 @@ async function handleSign(request, env) {
   for (let i = 0; i < 5; i++) {
     id = generateId(idLen)
     try {
-      await env.DB.prepare('INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)')
-        .bind(id, body.bucket, key, exp).run()
+      await env.DB.prepare(
+        'INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)',
+      )
+        .bind(id, body.bucket, key, exp)
+        .run()
       break
     } catch (e) {
       if (String(e?.message).includes('UNIQUE') && i < 4) continue
@@ -660,26 +787,49 @@ BUCKETS 解析时校验字段/endpoint/唯一 id；key 规范化拒绝穿越/控
 **Step 1: `test/deliver.test.js`**
 
 ```js
-import { SELF, env, fetchMock, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
+import {
+  SELF,
+  env,
+  fetchMock,
+  createExecutionContext,
+  waitOnExecutionContext,
+} from 'cloudflare:test'
 import worker from '../index.js'
-import { expect, test, beforeAll, afterEach, beforeEach, describe } from 'vitest'
+import {
+  expect,
+  test,
+  beforeAll,
+  afterEach,
+  beforeEach,
+  describe,
+} from 'vitest'
 import { resetDb, insertLink, FUTURE } from './helpers.js'
 
 const ORIGIN = 'https://s3.us-west-004.backblazeb2.com'
 
-beforeAll(() => { fetchMock.activate(); fetchMock.disableNetConnect() })
+beforeAll(() => {
+  fetchMock.activate()
+  fetchMock.disableNetConnect()
+})
 beforeEach(resetDb)
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
 describe('GET /s/<id> happy path', () => {
   test('streams file, sanitizes headers, sets public cache-control', async () => {
     await insertLink('id0000000001', 'b2test', 'a.png', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/a.png', method: 'GET' }).reply(200, 'PNGDATA', {
-      headers: {
-        'content-type': 'image/png', 'content-length': '7', 'accept-ranges': 'bytes',
-        etag: '"abc"', 'x-amz-request-id': 'LEAK', 'x-amz-id-2': 'LEAK2',
-      },
-    })
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/a.png', method: 'GET' })
+      .reply(200, 'PNGDATA', {
+        headers: {
+          'content-type': 'image/png',
+          'content-length': '7',
+          'accept-ranges': 'bytes',
+          etag: '"abc"',
+          'x-amz-request-id': 'LEAK',
+          'x-amz-id-2': 'LEAK2',
+        },
+      })
     const res = await SELF.fetch('https://cdn.example.com/s/id0000000001')
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('PNGDATA')
@@ -693,31 +843,62 @@ describe('GET /s/<id> happy path', () => {
   test('keys with special chars are RFC3986-encoded into the origin URL', async () => {
     await insertLink('id0000000004', 'b2test', 'a dir/b?c#d.png', FUTURE)
     // 若 aws4fetch 对 S3 路径双重编码，这里的 path 不匹配 -> fetchMock 抛错 -> 测试失败（正是我们要的暴露）
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/a%20dir/b%3Fc%23d.png', method: 'GET' }).reply(200, 'OK', {})
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/a%20dir/b%3Fc%23d.png', method: 'GET' })
+      .reply(200, 'OK', {})
     const res = await SELF.fetch('https://cdn.example.com/s/id0000000004')
     expect(res.status).toBe(200)
   })
 
   test('endpoint scheme+port honored (MinIO-style; guards against host-only regression)', async () => {
     const BUCKETS = JSON.stringify([
-      { id: 'minio', name: 'mybucket', endpoint: 'https://minio.example.com:9000', region: 'us-east-1', keyId: 'k', applicationKey: 's' },
+      {
+        id: 'minio',
+        name: 'mybucket',
+        endpoint: 'https://minio.example.com:9000',
+        region: 'us-east-1',
+        keyId: 'k',
+        applicationKey: 's',
+      },
     ])
     await insertLink('minio0000001', 'minio', 'a.png', FUTURE)
-    fetchMock.get('https://minio.example.com:9000').intercept({ path: '/mybucket/a.png', method: 'GET' }).reply(200, 'OK', {})
+    fetchMock
+      .get('https://minio.example.com:9000')
+      .intercept({ path: '/mybucket/a.png', method: 'GET' })
+      .reply(200, 'OK', {})
     const ctx = createExecutionContext()
-    const res = await worker.fetch(new Request('https://cdn.example.com/s/minio0000001'), { ...env, BUCKETS }, ctx)
+    const res = await worker.fetch(
+      new Request('https://cdn.example.com/s/minio0000001'),
+      { ...env, BUCKETS },
+      ctx,
+    )
     await waitOnExecutionContext(ctx)
     expect(res.status).toBe(200) // 端口被保留进 origin URL
   })
 
   test('http endpoint is honored (trusted-network S3, e.g. local MinIO)', async () => {
     const BUCKETS = JSON.stringify([
-      { id: 'http1', name: 'b', endpoint: 'http://minio.local:9000', region: 'us-east-1', keyId: 'k', applicationKey: 's' },
+      {
+        id: 'http1',
+        name: 'b',
+        endpoint: 'http://minio.local:9000',
+        region: 'us-east-1',
+        keyId: 'k',
+        applicationKey: 's',
+      },
     ])
     await insertLink('http00000001', 'http1', 'a.png', FUTURE)
-    fetchMock.get('http://minio.local:9000').intercept({ path: '/b/a.png', method: 'GET' }).reply(200, 'OK', {})
+    fetchMock
+      .get('http://minio.local:9000')
+      .intercept({ path: '/b/a.png', method: 'GET' })
+      .reply(200, 'OK', {})
     const ctx = createExecutionContext()
-    const res = await worker.fetch(new Request('https://cdn.example.com/s/http00000001'), { ...env, BUCKETS }, ctx)
+    const res = await worker.fetch(
+      new Request('https://cdn.example.com/s/http00000001'),
+      { ...env, BUCKETS },
+      ctx,
+    )
     await waitOnExecutionContext(ctx)
     expect(res.status).toBe(200) // http 端点（任意端口）走同一回源路径，防止误删 http 支持
   })
@@ -725,17 +906,30 @@ describe('GET /s/<id> happy path', () => {
   test('two ids for same bucket+key hit one internal cache key', async () => {
     await insertLink('id0000000002', 'b2test', 'shared.bin', FUTURE)
     await insertLink('id0000000003', 'b2test', 'shared.bin', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/shared.bin', method: 'GET' })
-      .reply(200, 'SHARED', { headers: { 'content-type': 'application/octet-stream' } }).times(1)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/shared.bin', method: 'GET' })
+      .reply(200, 'SHARED', {
+        headers: { 'content-type': 'application/octet-stream' },
+      })
+      .times(1)
 
     // 用 worker.fetch + waitOnExecutionContext 确保第一次的 cache.put 落盘后再发第二次
     const ctx1 = createExecutionContext()
-    const r1 = await worker.fetch(new Request('https://cdn.example.com/s/id0000000002'), env, ctx1)
+    const r1 = await worker.fetch(
+      new Request('https://cdn.example.com/s/id0000000002'),
+      env,
+      ctx1,
+    )
     expect(await r1.text()).toBe('SHARED')
     await waitOnExecutionContext(ctx1)
 
     const ctx2 = createExecutionContext()
-    const r2 = await worker.fetch(new Request('https://cdn.example.com/s/id0000000003'), env, ctx2)
+    const r2 = await worker.fetch(
+      new Request('https://cdn.example.com/s/id0000000003'),
+      env,
+      ctx2,
+    )
     expect(await r2.text()).toBe('SHARED')
     await waitOnExecutionContext(ctx2)
     // afterEach 的 assertNoPendingInterceptors 确认上游只被调用一次
@@ -752,18 +946,36 @@ describe('GET /s/<id> happy path', () => {
 ```js
 import { AwsClient } from 'aws4fetch'
 
-const PASS_THROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
+const PASS_THROUGH_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-range',
+  'accept-ranges',
+  'etag',
+  'last-modified',
+]
 
 function encodeKey(key) {
-  return key.split('/')
-    .map((s) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()))
+  return key
+    .split('/')
+    .map((s) =>
+      encodeURIComponent(s).replace(
+        /[!*'()]/g,
+        (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+      ),
+    )
     .join('/')
 }
 function buildOriginUrl(cfg, key) {
   return `${cfg.origin}/${encodeURIComponent(cfg.name)}/${encodeKey(key)}`
 }
 function makeClient(cfg) {
-  return new AwsClient({ accessKeyId: cfg.keyId, secretAccessKey: cfg.applicationKey, service: 's3', region: cfg.region })
+  return new AwsClient({
+    accessKeyId: cfg.keyId,
+    secretAccessKey: cfg.applicationKey,
+    service: 's3',
+    region: cfg.region,
+  })
 }
 function sanitizeHeaders(upstream, cacheControl) {
   const h = new Headers()
@@ -786,7 +998,11 @@ function mapUpstreamError(status) {
 ```js
 async function handleDeliver(request, env, ctx, id) {
   let row
-  try { row = await resolveLink(env, id) } catch { return noStore(503, 'Service Unavailable') }
+  try {
+    row = await resolveLink(env, id)
+  } catch {
+    return noStore(503, 'Service Unavailable')
+  }
   const now = Math.floor(Date.now() / 1000)
   if (!row) return noStore(404, 'Not Found')
   if (row.exp < now) {
@@ -795,7 +1011,11 @@ async function handleDeliver(request, env, ctx, id) {
   }
 
   let buckets
-  try { buckets = getBuckets(env) } catch { return noStore(500, 'Server Error') }
+  try {
+    buckets = getBuckets(env)
+  } catch {
+    return noStore(500, 'Server Error')
+  }
   const cfg = buckets.get(row.bucket_id)
   const key = normalizeKey(row.p)
   if (!cfg || !key) return noStore(404, 'Not Found')
@@ -814,16 +1034,25 @@ async function handleDeliver(request, env, ctx, id) {
   try {
     const hit = await cache.match(cacheKey)
     if (hit) return hit
-  } catch { /* treat as miss */ }
+  } catch {
+    /* treat as miss */
+  }
 
   let resp
-  try { resp = await fetch(await client.sign(url, { method: 'GET' })) } catch { return noStore(502, 'Bad Gateway') }
+  try {
+    resp = await fetch(await client.sign(url, { method: 'GET' }))
+  } catch {
+    return noStore(502, 'Bad Gateway')
+  }
   if (!resp.ok) {
     resp.body?.cancel() // release upstream error-body resources; never forward it
     return noStore(mapUpstreamError(resp.status), 'Upstream Error')
   }
 
-  const response = new Response(resp.body, { status: 200, headers: sanitizeHeaders(resp.headers, cacheControl) })
+  const response = new Response(resp.body, {
+    status: 200,
+    headers: sanitizeHeaders(resp.headers, cacheControl),
+  })
   ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
   return response
 }
@@ -852,12 +1081,22 @@ bucketId+key 安全编码键去重。"
 
 ```js
 import { SELF, fetchMock } from 'cloudflare:test'
-import { expect, test, beforeAll, afterEach, beforeEach, describe } from 'vitest'
+import {
+  expect,
+  test,
+  beforeAll,
+  afterEach,
+  beforeEach,
+  describe,
+} from 'vitest'
 import { resetDb, insertLink, FUTURE } from './helpers.js'
 
 const ORIGIN = 'https://s3.us-west-004.backblazeb2.com'
 
-beforeAll(() => { fetchMock.activate(); fetchMock.disableNetConnect() })
+beforeAll(() => {
+  fetchMock.activate()
+  fetchMock.disableNetConnect()
+})
 beforeEach(resetDb)
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
@@ -865,8 +1104,17 @@ describe('Range', () => {
   test('passes Range, returns 206, not cached (each request hits origin)', async () => {
     await insertLink('vid000000001', 'b2test', 'movie.mp4', FUTURE)
     await insertLink('vid000000002', 'b2test', 'movie.mp4', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/movie.mp4', method: 'GET' })
-      .reply(206, 'PARTIA', { headers: { 'content-range': 'bytes 0-5/100', 'content-length': '6', 'accept-ranges': 'bytes', 'content-type': 'video/mp4' } })
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/movie.mp4', method: 'GET' })
+      .reply(206, 'PARTIA', {
+        headers: {
+          'content-range': 'bytes 0-5/100',
+          'content-length': '6',
+          'accept-ranges': 'bytes',
+          'content-type': 'video/mp4',
+        },
+      })
       .times(2)
     const opts = { headers: { range: 'bytes=0-5' } }
     const r1 = await SELF.fetch('https://cdn.example.com/s/vid000000001', opts)
@@ -880,18 +1128,32 @@ describe('Range', () => {
   test('retries when large-file response lacks content-range, then succeeds', async () => {
     await insertLink('big000000001', 'b2test', 'big.iso', FUTURE)
     const pool = fetchMock.get(ORIGIN)
-    pool.intercept({ path: '/test-bucket/big.iso', method: 'GET' }).reply(200, 'FULL', { headers: { 'content-length': '4' } }).times(2)
-    pool.intercept({ path: '/test-bucket/big.iso', method: 'GET' }).reply(206, 'CHUN', { headers: { 'content-range': 'bytes 0-3/9999', 'content-length': '4' } })
-    const res = await SELF.fetch('https://cdn.example.com/s/big000000001', { headers: { range: 'bytes=0-3' } })
+    pool
+      .intercept({ path: '/test-bucket/big.iso', method: 'GET' })
+      .reply(200, 'FULL', { headers: { 'content-length': '4' } })
+      .times(2)
+    pool
+      .intercept({ path: '/test-bucket/big.iso', method: 'GET' })
+      .reply(206, 'CHUN', {
+        headers: { 'content-range': 'bytes 0-3/9999', 'content-length': '4' },
+      })
+    const res = await SELF.fetch('https://cdn.example.com/s/big000000001', {
+      headers: { range: 'bytes=0-3' },
+    })
     expect(res.status).toBe(206)
     expect(res.headers.get('content-range')).toBe('bytes 0-3/9999')
   })
 
   test('3 attempts all non-206 -> 502, no body (never return full file to a Range)', async () => {
     await insertLink('bad000000001', 'b2test', 'big.iso', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/big.iso', method: 'GET' })
-      .reply(200, 'WHOLEFILE', { headers: { 'content-length': '9' } }).times(3)
-    const res = await SELF.fetch('https://cdn.example.com/s/bad000000001', { headers: { range: 'bytes=0-3' } })
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/big.iso', method: 'GET' })
+      .reply(200, 'WHOLEFILE', { headers: { 'content-length': '9' } })
+      .times(3)
+    const res = await SELF.fetch('https://cdn.example.com/s/bad000000001', {
+      headers: { range: 'bytes=0-3' },
+    })
     expect(res.status).toBe(502)
     expect(await res.text()).toBe('')
     expect(res.headers.get('cache-control')).toBe('no-store')
@@ -899,8 +1161,13 @@ describe('Range', () => {
 
   test('416 from upstream -> 416', async () => {
     await insertLink('r16000000001', 'b2test', 'x.bin', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/x.bin', method: 'GET' }).reply(416, '', {})
-    const res = await SELF.fetch('https://cdn.example.com/s/r16000000001', { headers: { range: 'bytes=99999-' } })
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/x.bin', method: 'GET' })
+      .reply(416, '', {})
+    const res = await SELF.fetch('https://cdn.example.com/s/r16000000001', {
+      headers: { range: 'bytes=99999-' },
+    })
     expect(res.status).toBe(416)
   })
 })
@@ -914,16 +1181,27 @@ describe('Range', () => {
 const RANGE_RETRY_ATTEMPTS = 3
 
 async function fetchRange(client, url, rangeHeader) {
-  const signed = await client.sign(url, { method: 'GET', headers: { range: rangeHeader } })
+  const signed = await client.sign(url, {
+    method: 'GET',
+    headers: { range: rangeHeader },
+  })
   let attempts = RANGE_RETRY_ATTEMPTS
   let response
   do {
     const controller = new AbortController()
-    response = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
+    response = await fetch(signed.url, {
+      method: 'GET',
+      headers: signed.headers,
+      signal: controller.signal,
+    })
     if (response.status === 206) break
-    if (response.ok) { // 200 = range 被忽略（大文件 bug）：丢弃重试
+    if (response.ok) {
+      // 200 = range 被忽略（大文件 bug）：丢弃重试
       attempts -= 1
-      if (attempts > 0) { controller.abort(); continue }
+      if (attempts > 0) {
+        controller.abort()
+        continue
+      }
     }
     break // 206 已 break；上游错误或重试耗尽落到这里
   } while (attempts > 0)
@@ -934,21 +1212,31 @@ async function fetchRange(client, url, rangeHeader) {
 `handleDeliver` 内（`const cacheControl = ...` 之后、cache 之前）：
 
 ```js
-  const isHead = request.method === 'HEAD'
-  const rangeHeader = request.headers.get('range')
+const isHead = request.method === 'HEAD'
+const rangeHeader = request.headers.get('range')
 
-  if (rangeHeader) {
-    let resp
-    try { resp = await fetchRange(client, url, rangeHeader) } catch { return noStore(502, 'Bad Gateway') }
-    if (resp.status !== 206) {
-      resp.body?.cancel() // 绝不把 200 全量 / 错误体返回给 Range 请求
-      if (resp.status === 416) return noStore(416, 'Range Not Satisfiable')
-      return noStore(resp.status >= 400 ? mapUpstreamError(resp.status) : 502, 'Bad Gateway')
-    }
-    const headers = sanitizeHeaders(resp.headers, cacheControl)
-    if (isHead) { resp.body?.cancel(); return new Response(null, { status: 206, headers }) }
-    return new Response(resp.body, { status: 206, headers })
+if (rangeHeader) {
+  let resp
+  try {
+    resp = await fetchRange(client, url, rangeHeader)
+  } catch {
+    return noStore(502, 'Bad Gateway')
   }
+  if (resp.status !== 206) {
+    resp.body?.cancel() // 绝不把 200 全量 / 错误体返回给 Range 请求
+    if (resp.status === 416) return noStore(416, 'Range Not Satisfiable')
+    return noStore(
+      resp.status >= 400 ? mapUpstreamError(resp.status) : 502,
+      'Bad Gateway',
+    )
+  }
+  const headers = sanitizeHeaders(resp.headers, cacheControl)
+  if (isHead) {
+    resp.body?.cancel()
+    return new Response(null, { status: 206, headers })
+  }
+  return new Response(resp.body, { status: 206, headers })
+}
 ```
 
 **Step 4: Run** `npm test -- test/range.test.js` → Expected: PASS。
@@ -979,15 +1267,28 @@ import { resetDb, insertLink, FUTURE } from './helpers.js'
 
 const ORIGIN = 'https://s3.us-west-004.backblazeb2.com'
 
-beforeAll(() => { fetchMock.activate(); fetchMock.disableNetConnect() })
+beforeAll(() => {
+  fetchMock.activate()
+  fetchMock.disableNetConnect()
+})
 beforeEach(resetDb)
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
 test('HEAD returns metadata headers and empty body', async () => {
   await insertLink('head00000001', 'b2test', 'clip.mp4', FUTURE)
-  fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/clip.mp4', method: 'GET' })
-    .reply(200, 'IGNOREDBODY', { headers: { 'content-type': 'video/mp4', 'content-length': '12345', 'accept-ranges': 'bytes' } })
-  const res = await SELF.fetch('https://cdn.example.com/s/head00000001', { method: 'HEAD' })
+  fetchMock
+    .get(ORIGIN)
+    .intercept({ path: '/test-bucket/clip.mp4', method: 'GET' })
+    .reply(200, 'IGNOREDBODY', {
+      headers: {
+        'content-type': 'video/mp4',
+        'content-length': '12345',
+        'accept-ranges': 'bytes',
+      },
+    })
+  const res = await SELF.fetch('https://cdn.example.com/s/head00000001', {
+    method: 'HEAD',
+  })
   expect(res.status).toBe(200)
   expect(res.headers.get('content-length')).toBe('12345')
   expect(res.headers.get('accept-ranges')).toBe('bytes')
@@ -996,9 +1297,16 @@ test('HEAD returns metadata headers and empty body', async () => {
 
 test('HEAD + Range returns empty body 206', async () => {
   await insertLink('head00000002', 'b2test', 'clip.mp4', FUTURE)
-  fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/clip.mp4', method: 'GET' })
-    .reply(206, 'PART', { headers: { 'content-range': 'bytes 0-3/100', 'content-length': '4' } })
-  const res = await SELF.fetch('https://cdn.example.com/s/head00000002', { method: 'HEAD', headers: { range: 'bytes=0-3' } })
+  fetchMock
+    .get(ORIGIN)
+    .intercept({ path: '/test-bucket/clip.mp4', method: 'GET' })
+    .reply(206, 'PART', {
+      headers: { 'content-range': 'bytes 0-3/100', 'content-length': '4' },
+    })
+  const res = await SELF.fetch('https://cdn.example.com/s/head00000002', {
+    method: 'HEAD',
+    headers: { range: 'bytes=0-3' },
+  })
   expect(res.status).toBe(206)
   expect(res.headers.get('content-range')).toBe('bytes 0-3/100')
   expect(await res.text()).toBe('')
@@ -1010,18 +1318,24 @@ test('HEAD + Range returns empty body 206', async () => {
 **Step 3: 实现（`handleDeliver` 内，Range 分支之后、normal GET 之前）**
 
 ```js
-  if (isHead) {
-    try {
-      const controller = new AbortController()
-      const signed = await client.sign(url, { method: 'GET' }) // issue #18: 按 GET 签名
-      const resp = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
-      const headers = sanitizeHeaders(resp.headers, cacheControl)
-      const status = resp.status
-      controller.abort() // 停止 body 传输，不下载全量
-      if (!resp.ok) return noStore(mapUpstreamError(status), 'Upstream Error')
-      return new Response(null, { status, headers })
-    } catch { return noStore(502, 'Bad Gateway') }
+if (isHead) {
+  try {
+    const controller = new AbortController()
+    const signed = await client.sign(url, { method: 'GET' }) // issue #18: 按 GET 签名
+    const resp = await fetch(signed.url, {
+      method: 'GET',
+      headers: signed.headers,
+      signal: controller.signal,
+    })
+    const headers = sanitizeHeaders(resp.headers, cacheControl)
+    const status = resp.status
+    controller.abort() // 停止 body 传输，不下载全量
+    if (!resp.ok) return noStore(mapUpstreamError(status), 'Upstream Error')
+    return new Response(null, { status, headers })
+  } catch {
+    return noStore(502, 'Bad Gateway')
   }
+}
 ```
 
 > HEAD+Range 已在 Task 5 的 Range 分支内处理（`if (isHead) cancel + 无体 206`），故此分支只处理无 Range 的 HEAD。
@@ -1039,22 +1353,48 @@ test('HEAD + Range returns empty body 206', async () => {
 **Step 1: `test/errors.test.js`**
 
 ```js
-import { SELF, fetchMock, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
+import {
+  SELF,
+  fetchMock,
+  env,
+  createExecutionContext,
+  waitOnExecutionContext,
+} from 'cloudflare:test'
 import worker from '../index.js'
-import { expect, test, beforeAll, afterEach, beforeEach, describe } from 'vitest'
+import {
+  expect,
+  test,
+  beforeAll,
+  afterEach,
+  beforeEach,
+  describe,
+} from 'vitest'
 import { resetDb, insertLink, FUTURE, PAST } from './helpers.js'
 
 const ORIGIN = 'https://s3.us-west-004.backblazeb2.com'
 
-beforeAll(() => { fetchMock.activate(); fetchMock.disableNetConnect() })
+beforeAll(() => {
+  fetchMock.activate()
+  fetchMock.disableNetConnect()
+})
 beforeEach(resetDb)
-afterEach(() => { try { fetchMock.assertNoPendingInterceptors() } catch {} })
+afterEach(() => {
+  try {
+    fetchMock.assertNoPendingInterceptors()
+  } catch {}
+})
 
 describe('upstream (B2) errors are sanitized & not cached', () => {
   test('404 -> 404, no B2 body leak', async () => {
     await insertLink('e404', 'b2test', 'missing.png', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/missing.png', method: 'GET' })
-      .reply(404, '<Error><Code>NoSuchKey</Code><BucketName>test-bucket</BucketName></Error>', { headers: { 'content-type': 'application/xml' } })
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/missing.png', method: 'GET' })
+      .reply(
+        404,
+        '<Error><Code>NoSuchKey</Code><BucketName>test-bucket</BucketName></Error>',
+        { headers: { 'content-type': 'application/xml' } },
+      )
     const res = await SELF.fetch('https://cdn.example.com/s/e404')
     expect(res.status).toBe(404)
     expect(await res.text()).toBe('')
@@ -1062,30 +1402,64 @@ describe('upstream (B2) errors are sanitized & not cached', () => {
   })
   test('5xx -> 502', async () => {
     await insertLink('e503', 'b2test', 'x.png', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/x.png', method: 'GET' }).reply(503, 'down')
-    expect((await SELF.fetch('https://cdn.example.com/s/e503')).status).toBe(502)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/x.png', method: 'GET' })
+      .reply(503, 'down')
+    expect((await SELF.fetch('https://cdn.example.com/s/e503')).status).toBe(
+      502,
+    )
   })
   test('403 -> 502 (never reveal)', async () => {
     await insertLink('e403', 'b2test', 'x.png', FUTURE)
-    fetchMock.get(ORIGIN).intercept({ path: '/test-bucket/x.png', method: 'GET' }).reply(403, 'AccessDenied')
-    expect((await SELF.fetch('https://cdn.example.com/s/e403')).status).toBe(502)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/x.png', method: 'GET' })
+      .reply(403, 'AccessDenied')
+    expect((await SELF.fetch('https://cdn.example.com/s/e403')).status).toBe(
+      502,
+    )
   })
 })
 
 describe('D1 failure is fail-closed (no upstream fetch)', () => {
   test('resolve throws -> 503', async () => {
-    const db = { prepare: () => ({ bind: () => ({ first: () => { throw new Error('D1_ERROR: too many requests') } }) }) }
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          first: () => {
+            throw new Error('D1_ERROR: too many requests')
+          },
+        }),
+      }),
+    }
     const ctx = createExecutionContext()
-    const res = await worker.fetch(new Request('https://cdn.example.com/s/whatever'), { ...env, DB: db }, ctx)
+    const res = await worker.fetch(
+      new Request('https://cdn.example.com/s/whatever'),
+      { ...env, DB: db },
+      ctx,
+    )
     await waitOnExecutionContext(ctx)
     expect(res.status).toBe(503)
     expect(res.headers.get('cache-control')).toBe('no-store')
   })
   test('insert throws -> 503', async () => {
-    const db = { prepare: () => ({ bind: () => ({ run: () => { throw new Error('D1_ERROR: quota exceeded') } }) }) }
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          run: () => {
+            throw new Error('D1_ERROR: quota exceeded')
+          },
+        }),
+      }),
+    }
     const ctx = createExecutionContext()
     const req = new Request('https://cdn.example.com/api/sign', {
-      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer test-admin-pass' },
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer test-admin-pass',
+      },
       body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }),
     })
     const res = await worker.fetch(req, { ...env, DB: db }, ctx)
@@ -1098,10 +1472,16 @@ test('expired link -> 404, no upstream fetch, and lazily deleted', async () => {
   await insertLink('expx', 'b2test', 'x.png', PAST)
   const ctx = createExecutionContext()
   // 未注册 interceptor：若回源会因 disableNetConnect 抛错
-  const res = await worker.fetch(new Request('https://cdn.example.com/s/expx'), env, ctx)
+  const res = await worker.fetch(
+    new Request('https://cdn.example.com/s/expx'),
+    env,
+    ctx,
+  )
   expect(res.status).toBe(404)
   await waitOnExecutionContext(ctx) // flush lazy DELETE
-  const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?').bind('expx').first()
+  const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?')
+    .bind('expx')
+    .first()
   expect(row).toBeNull()
 })
 ```
@@ -1133,22 +1513,31 @@ const REVOKE_PATH = '/api/revoke'
 async function handleRevoke(request, env) {
   if (!(await authenticate(request, env))) return noStore(401, 'Unauthorized')
   let body
-  try { body = await request.json() } catch { return jsonResponse({ error: 'invalid json' }, 400) }
-  if (typeof body.id !== 'string') return jsonResponse({ error: 'invalid id' }, 400)
   try {
-    const res = await env.DB.prepare('DELETE FROM links WHERE id = ?').bind(body.id).run()
+    body = await request.json()
+  } catch {
+    return jsonResponse({ error: 'invalid json' }, 400)
+  }
+  if (typeof body.id !== 'string')
+    return jsonResponse({ error: 'invalid id' }, 400)
+  try {
+    const res = await env.DB.prepare('DELETE FROM links WHERE id = ?')
+      .bind(body.id)
+      .run()
     return jsonResponse({ deleted: res.meta.changes > 0 })
-  } catch { return noStore(503, 'Service Unavailable') }
+  } catch {
+    return noStore(503, 'Service Unavailable')
+  }
 }
 ```
 
 路由（`/api/sign` 之后）：
 
 ```js
-    if (path === REVOKE_PATH) {
-      if (request.method !== 'POST') return noStore(405, 'Method Not Allowed')
-      return handleRevoke(request, env)
-    }
+if (path === REVOKE_PATH) {
+  if (request.method !== 'POST') return noStore(405, 'Method Not Allowed')
+  return handleRevoke(request, env)
+}
 ```
 
 **Commit** `feat(网关): 可选 POST /api/revoke 撤销短链`
@@ -1187,6 +1576,7 @@ export async function cleanupExpired(env) {
 **Files:** Modify `README.md`（重写）、`CHANGELOG.md`
 
 **README 至少包含**：
+
 - 定位与**安全模型**（短链不可枚举、fail-closed、不泄露后端、稳定 bucket id、对象 key 安全编码）。
 - 部署：`npm install` → `wrangler d1 create cdn-links`（填 `database_id`）→ `wrangler d1 migrations apply cdn-links`（本地加 `--local`）→ 设 secrets：
   ```bash
@@ -1196,7 +1586,16 @@ export async function cleanupExpired(env) {
   ```
   `buckets.json` 示例（数组，每桶一组，含稳定 `id`）：
   ```json
-  [{"id":"b2main","name":"1145141919810","endpoint":"s3.us-west-004.backblazeb2.com","region":"us-west-004","keyId":"...","applicationKey":"..."}]
+  [
+    {
+      "id": "b2main",
+      "name": "1145141919810",
+      "endpoint": "s3.us-west-004.backblazeb2.com",
+      "region": "us-west-004",
+      "keyId": "...",
+      "applicationKey": "..."
+    }
+  ]
   ```
 - 配置表（`CACHE_TTL_SECONDS`/`TOKEN_TTL_SECONDS`/`TOKEN_ID_LENGTH` 及其边界）。
 - 生成短链：
@@ -1219,27 +1618,27 @@ export async function cleanupExpired(env) {
 
 ## 最终验收清单（对照原始需求 + 评审修复）
 
-| # | 验收项 | 覆盖 |
-|---|---|---|
-| 1 | `GET /s/<valid>` 流式返回文件 | Task 4 |
-| 2 | 过期短链 → 404、不回源 | Task 7 |
-| 3 | 未知/伪造 id → 404 | Task 2/7 |
-| 4 | 非白名单桶 id 无法签发 | Task 3 |
-| 5 | `GET /real-file.png` → 403、不回源不查缓存 | Task 2 |
-| 6 | `GET /<bucket>/key` → 403 | Task 2 |
-| 7 | `POST /s/<id>` → 405 | Task 2 |
-| 8 | 同文件两短链命中同一内部缓存键 | Task 4 |
-| 9 | Range → 206、不写整文件缓存 | Task 5 |
-| 10 | 不缓冲：`new Response(body,…)` + pretest 守卫 | Task 1/4/5 |
-| 11 | D1 超额度/异常 → 503、fail-closed 不回源 | Task 7 |
-| 12 | B2 错误不泄露后端、不缓存 | Task 7 |
-| 13 | HEAD（含 +Range）不下载全量、无体 | Task 5/6 |
-| 14 | 多线程并行 Range 正确 | Task 5 |
-| 15 | **桶用稳定 id，不受重排影响** | Task 1/3/4 |
-| 16 | **对象 key 安全编码（`?`/`#`/空格/`%2e%2e`）** | Task 3/4 |
-| 17 | **Range 重试耗尽 → 502，绝不返回全量** | Task 5 |
-| 18 | **配置/环境变量 schema 校验，fail-closed** | Task 3 |
-| 19 | **过期行惰性删除（命中即删）+ Cron 批量清理** | Task 2/4 + Task 9 |
+| #   | 验收项                                         | 覆盖              |
+| --- | ---------------------------------------------- | ----------------- |
+| 1   | `GET /s/<valid>` 流式返回文件                  | Task 4            |
+| 2   | 过期短链 → 404、不回源                         | Task 7            |
+| 3   | 未知/伪造 id → 404                             | Task 2/7          |
+| 4   | 非白名单桶 id 无法签发                         | Task 3            |
+| 5   | `GET /real-file.png` → 403、不回源不查缓存     | Task 2            |
+| 6   | `GET /<bucket>/key` → 403                      | Task 2            |
+| 7   | `POST /s/<id>` → 405                           | Task 2            |
+| 8   | 同文件两短链命中同一内部缓存键                 | Task 4            |
+| 9   | Range → 206、不写整文件缓存                    | Task 5            |
+| 10  | 不缓冲：`new Response(body,…)` + pretest 守卫  | Task 1/4/5        |
+| 11  | D1 超额度/异常 → 503、fail-closed 不回源       | Task 7            |
+| 12  | B2 错误不泄露后端、不缓存                      | Task 7            |
+| 13  | HEAD（含 +Range）不下载全量、无体              | Task 5/6          |
+| 14  | 多线程并行 Range 正确                          | Task 5            |
+| 15  | **桶用稳定 id，不受重排影响**                  | Task 1/3/4        |
+| 16  | **对象 key 安全编码（`?`/`#`/空格/`%2e%2e`）** | Task 3/4          |
+| 17  | **Range 重试耗尽 → 502，绝不返回全量**         | Task 5            |
+| 18  | **配置/环境变量 schema 校验，fail-closed**     | Task 3            |
+| 19  | **过期行惰性删除（命中即删）+ Cron 批量清理**  | Task 2/4 + Task 9 |
 
 ## 部署步骤（实现完成后交你执行）
 
@@ -1266,4 +1665,7 @@ npx wrangler deploy
 1. **aws4fetch 对 S3 路径的编码**：本方案对 key 预先按段 RFC3986 编码后交给 `client.sign`。若 aws4fetch 对 S3 再次编码导致双重编码，Task 4 的「特殊字符」测试会失败暴露；届时改为「传未编码 key、由 aws4fetch 编码」并保留 `?`/`#` 必须预编码（否则 `new URL` 会当 query/fragment）的处理。**部署后务必用真实 B2 验证一个含空格/中文的 key。**
 2. **pool 缓存行为**：去重测试依赖 `@cloudflare/vitest-pool-workers` 的 `caches.default` 生效；若该环境为 no-op，标 `.skip` 并改 `wrangler dev` 手验。
 3. **测试栈**：引入 `@cloudflare/vitest-pool-workers`（新增 devDeps）。不想要可砍 Task 1 测试部分改手动 curl，但 D1 失败/Range 重试/编码/不缓冲很难手验，强烈建议保留。
+
+```
+
 ```

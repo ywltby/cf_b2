@@ -3,16 +3,29 @@ import { AwsClient } from 'aws4fetch'
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const SIGN_PATH = '/api/sign'
 const REVOKE_PATH = '/api/revoke'
-const PASS_THROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
+const PASS_THROUGH_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-range',
+  'accept-ranges',
+  'etag',
+  'last-modified',
+]
 const RANGE_RETRY_ATTEMPTS = 3
 
 function noStore(status, statusText) {
-  return new Response(null, { status, statusText, headers: { 'cache-control': 'no-store' } })
+  return new Response(null, {
+    status,
+    statusText,
+    headers: { 'cache-control': 'no-store' },
+  })
 }
 
 async function resolveLink(env, id) {
   // throws on D1 errors; caller maps to 503
-  return env.DB.prepare('SELECT bucket_id, p, exp FROM links WHERE id = ?').bind(id).first()
+  return env.DB.prepare('SELECT bucket_id, p, exp FROM links WHERE id = ?')
+    .bind(id)
+    .first()
 }
 
 // Best-effort delete that never blocks and never throws into the response path —
@@ -31,14 +44,24 @@ function deleteLinkBestEffort(ctx, env, id) {
 function encodeKey(key) {
   return key
     .split('/')
-    .map((s) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()))
+    .map((s) =>
+      encodeURIComponent(s).replace(
+        /[!*'()]/g,
+        (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+      ),
+    )
     .join('/')
 }
 function buildOriginUrl(cfg, key) {
   return `${cfg.origin}/${encodeURIComponent(cfg.name)}/${encodeKey(key)}`
 }
 function makeClient(cfg) {
-  return new AwsClient({ accessKeyId: cfg.keyId, secretAccessKey: cfg.applicationKey, service: 's3', region: cfg.region })
+  return new AwsClient({
+    accessKeyId: cfg.keyId,
+    secretAccessKey: cfg.applicationKey,
+    service: 's3',
+    region: cfg.region,
+  })
 }
 function sanitizeHeaders(upstream, cacheControl) {
   const h = new Headers()
@@ -58,12 +81,19 @@ function mapUpstreamError(status) {
 // Large-file Cloudflare workaround: if a range request comes back 200 (range
 // ignored) instead of 206, abort and retry. See original cloudflare-b2 README.
 async function fetchRange(client, url, rangeHeader) {
-  const signed = await client.sign(url, { method: 'GET', headers: { range: rangeHeader } })
+  const signed = await client.sign(url, {
+    method: 'GET',
+    headers: { range: rangeHeader },
+  })
   let attempts = RANGE_RETRY_ATTEMPTS
   let response
   do {
     const controller = new AbortController()
-    response = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
+    response = await fetch(signed.url, {
+      method: 'GET',
+      headers: signed.headers,
+      signal: controller.signal,
+    })
     if (response.status === 206) break
     if (response.ok) {
       // 200 = range ignored: discard the wrong full body and retry
@@ -120,7 +150,10 @@ async function handleDeliver(request, env, ctx, id) {
     if (resp.status !== 206) {
       resp.body?.cancel()
       if (resp.status === 416) return noStore(416, 'Range Not Satisfiable')
-      return noStore(resp.status >= 400 ? mapUpstreamError(resp.status) : 502, 'Bad Gateway')
+      return noStore(
+        resp.status >= 400 ? mapUpstreamError(resp.status) : 502,
+        'Bad Gateway',
+      )
     }
     const headers = sanitizeHeaders(resp.headers, cacheControl)
     if (isHead) {
@@ -135,7 +168,11 @@ async function handleDeliver(request, env, ctx, id) {
     try {
       const controller = new AbortController()
       const signed = await client.sign(url, { method: 'GET' })
-      const resp = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
+      const resp = await fetch(signed.url, {
+        method: 'GET',
+        headers: signed.headers,
+        signal: controller.signal,
+      })
       const headers = sanitizeHeaders(resp.headers, cacheControl)
       const status = resp.status
       controller.abort()
@@ -169,7 +206,10 @@ async function handleDeliver(request, env, ctx, id) {
     return noStore(mapUpstreamError(resp.status), 'Upstream Error')
   }
 
-  const response = new Response(resp.body, { status: 200, headers: sanitizeHeaders(resp.headers, cacheControl) })
+  const response = new Response(resp.body, {
+    status: 200,
+    headers: sanitizeHeaders(resp.headers, cacheControl),
+  })
   ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
   return response
 }
@@ -177,7 +217,10 @@ async function handleDeliver(request, env, ctx, id) {
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+    },
   })
 }
 
@@ -193,14 +236,17 @@ function intVar(env, name, def, min, max) {
 // compatible endpoint is allowed, http and any port included. NOTE: http sends the
 // SigV4 auth header + data in plaintext — document as trusted-network only.
 function parseEndpoint(endpoint) {
-  const e = /^https?:\/\//i.test(endpoint.trim()) ? endpoint.trim() : 'https://' + endpoint.trim()
+  const e = /^https?:\/\//i.test(endpoint.trim())
+    ? endpoint.trim()
+    : 'https://' + endpoint.trim()
   let u
   try {
     u = new URL(e)
   } catch {
     throw new Error('bucket endpoint invalid')
   }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('bucket endpoint scheme invalid')
+  if (u.protocol !== 'https:' && u.protocol !== 'http:')
+    throw new Error('bucket endpoint scheme invalid')
   if (u.pathname !== '/' || u.search || u.hash || u.username || u.password) {
     throw new Error('bucket endpoint must be origin only')
   }
@@ -215,19 +261,38 @@ function getBuckets(env) {
   if (!raw) throw new Error('BUCKETS not configured')
   if (raw !== _bucketsRaw) {
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('BUCKETS must be a non-empty array')
+    if (!Array.isArray(parsed) || parsed.length === 0)
+      throw new Error('BUCKETS must be a non-empty array')
     const byId = new Map()
     const idRe = /^[A-Za-z0-9_-]{1,64}$/
     for (const c of parsed) {
-      for (const f of ['id', 'name', 'endpoint', 'region', 'keyId', 'applicationKey']) {
-        if (typeof c?.[f] !== 'string' || c[f].length === 0 || c[f].length > 1024) {
+      for (const f of [
+        'id',
+        'name',
+        'endpoint',
+        'region',
+        'keyId',
+        'applicationKey',
+      ]) {
+        if (
+          typeof c?.[f] !== 'string' ||
+          c[f].length === 0 ||
+          c[f].length > 1024
+        ) {
           throw new Error(`bucket field invalid: ${f}`)
         }
       }
       if (!idRe.test(c.id)) throw new Error('bucket id charset invalid') // id flows into D1/logs/URLs
       const origin = parseEndpoint(c.endpoint) // throws on invalid scheme/host/port
       if (byId.has(c.id)) throw new Error('duplicate bucket id')
-      byId.set(c.id, { id: c.id, name: c.name, origin, region: c.region, keyId: c.keyId, applicationKey: c.applicationKey })
+      byId.set(c.id, {
+        id: c.id,
+        name: c.name,
+        origin,
+        region: c.region,
+        keyId: c.keyId,
+        applicationKey: c.applicationKey,
+      })
     }
     _bucketsById = byId
     _bucketsRaw = raw
@@ -275,7 +340,9 @@ async function timingSafeEqual(a, b) {
 }
 async function authenticate(request, env) {
   if (!env.ADMIN_PASSWORD) return false
-  const m = (request.headers.get('authorization') || '').match(/^Bearer\s+(.+)$/)
+  const m = (request.headers.get('authorization') || '').match(
+    /^Bearer\s+(.+)$/,
+  )
   return m ? timingSafeEqual(m[1], env.ADMIN_PASSWORD) : false
 }
 
@@ -305,7 +372,11 @@ async function handleSign(request, env) {
 
   let ttl = intVar(env, 'TOKEN_TTL_SECONDS', 3600, 1, 31536000)
   if (body.expiresIn !== undefined) {
-    if (!Number.isInteger(body.expiresIn) || body.expiresIn <= 0 || body.expiresIn > 31536000) {
+    if (
+      !Number.isInteger(body.expiresIn) ||
+      body.expiresIn <= 0 ||
+      body.expiresIn > 31536000
+    ) {
       return jsonResponse({ error: 'invalid expiresIn' }, 403)
     }
     ttl = body.expiresIn
@@ -317,7 +388,9 @@ async function handleSign(request, env) {
   for (let i = 0; i < 5; i++) {
     id = generateId(idLen)
     try {
-      await env.DB.prepare('INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)')
+      await env.DB.prepare(
+        'INSERT INTO links (id, bucket_id, p, exp) VALUES (?, ?, ?, ?)',
+      )
         .bind(id, body.bucket, key, exp)
         .run()
       break
@@ -339,9 +412,12 @@ async function handleRevoke(request, env) {
   } catch {
     return jsonResponse({ error: 'invalid json' }, 400)
   }
-  if (typeof body.id !== 'string') return jsonResponse({ error: 'invalid id' }, 400)
+  if (typeof body.id !== 'string')
+    return jsonResponse({ error: 'invalid id' }, 400)
   try {
-    const res = await env.DB.prepare('DELETE FROM links WHERE id = ?').bind(body.id).run()
+    const res = await env.DB.prepare('DELETE FROM links WHERE id = ?')
+      .bind(body.id)
+      .run()
     return jsonResponse({ deleted: res.meta.changes > 0 })
   } catch {
     return noStore(503, 'Service Unavailable')
