@@ -129,7 +129,21 @@ async function handleDeliver(request, env, ctx, id) {
     return new Response(resp.body, { status: 206, headers })
   }
 
-  // (HEAD branch added in Task 6)
+  // HEAD (no range): sign GET (issue #18), capture headers, abort body (no full download)
+  if (isHead) {
+    try {
+      const controller = new AbortController()
+      const signed = await client.sign(url, { method: 'GET' })
+      const resp = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
+      const headers = sanitizeHeaders(resp.headers, cacheControl)
+      const status = resp.status
+      controller.abort()
+      if (!resp.ok) return noStore(mapUpstreamError(status), 'Upstream Error')
+      return new Response(null, { status, headers })
+    } catch {
+      return noStore(502, 'Bad Gateway')
+    }
+  }
 
   const cache = caches.default
   const cacheKey = new Request(
