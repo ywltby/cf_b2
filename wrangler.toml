@@ -19,6 +19,7 @@ database_name = "cdn-links"
 database_id = "<run: wrangler d1 create cdn-links, paste id>"
 migrations_dir = "migrations"
 
-# Optional expired-row cleanup (Task 9):
-# [triggers]
-# crons = ["0 3 * * *"]
+# Expired-row cleanup. Lazy deletion happens on access; this daily sweep removes
+# expired rows that are never accessed again.
+[triggers]
+crons = ["0 3 * * *"]

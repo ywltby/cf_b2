@@ -348,6 +348,12 @@ async function handleRevoke(request, env) {
   }
 }
 
+// ---- cleanup (Cron) ----
+export async function cleanupExpired(env) {
+  const now = Math.floor(Date.now() / 1000)
+  await env.DB.prepare('DELETE FROM links WHERE exp < ?').bind(now).run()
+}
+
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname
@@ -371,5 +377,9 @@ export default {
     }
 
     return noStore(403, 'Forbidden')
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(cleanupExpired(env).catch(() => {}))
   },
 }
