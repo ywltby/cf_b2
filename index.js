@@ -3,6 +3,7 @@ import { AwsClient } from 'aws4fetch'
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const SIGN_PATH = '/api/sign'
 const PASS_THROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
+const RANGE_RETRY_ATTEMPTS = 3
 
 function noStore(status, statusText) {
   return new Response(null, { status, statusText, headers: { 'cache-control': 'no-store' } })
@@ -53,6 +54,29 @@ function mapUpstreamError(status) {
   return 502 // 403/401/其它 4xx/5xx 一律泛化为网关错误，绝不泄露
 }
 
+// Large-file Cloudflare workaround: if a range request comes back 200 (range
+// ignored) instead of 206, abort and retry. See original cloudflare-b2 README.
+async function fetchRange(client, url, rangeHeader) {
+  const signed = await client.sign(url, { method: 'GET', headers: { range: rangeHeader } })
+  let attempts = RANGE_RETRY_ATTEMPTS
+  let response
+  do {
+    const controller = new AbortController()
+    response = await fetch(signed.url, { method: 'GET', headers: signed.headers, signal: controller.signal })
+    if (response.status === 206) break
+    if (response.ok) {
+      // 200 = range ignored: discard the wrong full body and retry
+      attempts -= 1
+      if (attempts > 0) {
+        controller.abort()
+        continue
+      }
+    }
+    break // 206 handled above; upstream error or exhausted retries fall through
+  } while (attempts > 0)
+  return response
+}
+
 async function handleDeliver(request, env, ctx, id) {
   let row
   try {
@@ -81,7 +105,31 @@ async function handleDeliver(request, env, ctx, id) {
   const client = makeClient(cfg)
   const cacheControl = `public, max-age=${intVar(env, 'CACHE_TTL_SECONDS', 86400, 0, 31536000)}`
 
-  // (Range branch added in Task 5; HEAD branch in Task 6)
+  const isHead = request.method === 'HEAD'
+  const rangeHeader = request.headers.get('range')
+
+  // RANGE: bypass cache, strict 206 (never return a full 200 to a Range request)
+  if (rangeHeader) {
+    let resp
+    try {
+      resp = await fetchRange(client, url, rangeHeader)
+    } catch {
+      return noStore(502, 'Bad Gateway')
+    }
+    if (resp.status !== 206) {
+      resp.body?.cancel()
+      if (resp.status === 416) return noStore(416, 'Range Not Satisfiable')
+      return noStore(resp.status >= 400 ? mapUpstreamError(resp.status) : 502, 'Bad Gateway')
+    }
+    const headers = sanitizeHeaders(resp.headers, cacheControl)
+    if (isHead) {
+      resp.body?.cancel()
+      return new Response(null, { status: 206, headers })
+    }
+    return new Response(resp.body, { status: 206, headers })
+  }
+
+  // (HEAD branch added in Task 6)
 
   const cache = caches.default
   const cacheKey = new Request(
