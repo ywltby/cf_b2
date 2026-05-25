@@ -1,5 +1,8 @@
+import { AwsClient } from 'aws4fetch'
+
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const SIGN_PATH = '/api/sign'
+const PASS_THROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
 
 function noStore(status, statusText) {
   return new Response(null, { status, statusText, headers: { 'cache-control': 'no-store' } })
@@ -22,6 +25,34 @@ function deleteLinkBestEffort(ctx, env, id) {
   )
 }
 
+// ---- origin (S3-compatible) ----
+function encodeKey(key) {
+  return key
+    .split('/')
+    .map((s) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()))
+    .join('/')
+}
+function buildOriginUrl(cfg, key) {
+  return `${cfg.origin}/${encodeURIComponent(cfg.name)}/${encodeKey(key)}`
+}
+function makeClient(cfg) {
+  return new AwsClient({ accessKeyId: cfg.keyId, secretAccessKey: cfg.applicationKey, service: 's3', region: cfg.region })
+}
+function sanitizeHeaders(upstream, cacheControl) {
+  const h = new Headers()
+  for (const name of PASS_THROUGH_HEADERS) {
+    const v = upstream.get(name)
+    if (v !== null) h.set(name, v)
+  }
+  h.set('cache-control', cacheControl)
+  return h
+}
+function mapUpstreamError(status) {
+  if (status === 404) return 404
+  if (status === 416) return 416
+  return 502 // 403/401/其它 4xx/5xx 一律泛化为网关错误，绝不泄露
+}
+
 async function handleDeliver(request, env, ctx, id) {
   let row
   try {
@@ -35,7 +66,49 @@ async function handleDeliver(request, env, ctx, id) {
     deleteLinkBestEffort(ctx, env, id) // lazy cleanup; never blocks / never throws into response
     return noStore(404, 'Not Found')
   }
-  return noStore(404, 'Not Found') // origin in later tasks
+
+  let buckets
+  try {
+    buckets = getBuckets(env)
+  } catch {
+    return noStore(500, 'Server Error')
+  }
+  const cfg = buckets.get(row.bucket_id)
+  const key = normalizeKey(row.p)
+  if (!cfg || !key) return noStore(404, 'Not Found')
+
+  const url = buildOriginUrl(cfg, key)
+  const client = makeClient(cfg)
+  const cacheControl = `public, max-age=${intVar(env, 'CACHE_TTL_SECONDS', 86400, 0, 31536000)}`
+
+  // (Range branch added in Task 5; HEAD branch in Task 6)
+
+  const cache = caches.default
+  const cacheKey = new Request(
+    `https://cache.local/${encodeURIComponent(row.bucket_id)}/${encodeURIComponent(key)}`,
+    { method: 'GET' },
+  )
+  try {
+    const hit = await cache.match(cacheKey)
+    if (hit) return hit
+  } catch {
+    /* treat as miss */
+  }
+
+  let resp
+  try {
+    resp = await fetch(await client.sign(url, { method: 'GET' }))
+  } catch {
+    return noStore(502, 'Bad Gateway')
+  }
+  if (!resp.ok) {
+    resp.body?.cancel() // release upstream error-body resources; never forward it
+    return noStore(mapUpstreamError(resp.status), 'Upstream Error')
+  }
+
+  const response = new Response(resp.body, { status: 200, headers: sanitizeHeaders(resp.headers, cacheControl) })
+  ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
+  return response
 }
 
 function jsonResponse(obj, status = 200) {
