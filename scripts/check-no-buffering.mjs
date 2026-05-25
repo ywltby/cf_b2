@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs'
 
-const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+const raw = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+// Ignore template-literal contents (e.g. the embedded admin HTML, whose client-side
+// JS legitimately calls r.text()/r.json()). The worker's own upstream-body reads are
+// never inside template literals.
+const src = raw.replace(/`[\s\S]*?`/g, '``')
 const forbidden = [
   /\.arrayBuffer\s*\(/, // never needed
   /\.blob\s*\(/, // never needed

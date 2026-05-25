@@ -430,6 +430,74 @@ export async function cleanupExpired(env) {
   await env.DB.prepare('DELETE FROM links WHERE exp < ?').bind(now).run()
 }
 
+// Admin signing UI (static, no secrets; same-origin POST to /api/sign).
+const ADMIN_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>短链签发</title>
+<style>
+  :root { color-scheme: dark light; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 20px; }
+  label { display:block; margin: 14px 0 4px; font-size: 13px; color:#888; }
+  input { width:100%; box-sizing:border-box; padding:10px; font-size:14px; border:1px solid #999; border-radius:8px; background:transparent; color:inherit; }
+  button { margin-top:18px; padding:10px 18px; font-size:15px; border:0; border-radius:8px; background:#3b82f6; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #out { margin-top:20px; padding:14px; border-radius:8px; word-break:break-all; font-size:14px; display:none; }
+  #out.ok { background:rgba(34,197,94,.14); }
+  #out.err { background:rgba(239,68,68,.14); }
+  #link { font-weight:600; }
+  small { color:#888; }
+</style>
+</head>
+<body>
+<h1>短链签发</h1>
+<label>管理员密码</label>
+<input id="pw" type="password" autocomplete="current-password" placeholder="ADMIN_PASSWORD">
+<label>桶 id</label>
+<input id="bucket" placeholder="BUCKETS 里的 id">
+<label>对象 key（桶里真实文件路径，前导 / 可省略）</label>
+<input id="path" placeholder="path/to/file.png">
+<label>有效期（秒，留空用默认）</label>
+<input id="ttl" type="number" min="1" placeholder="默认 TOKEN_TTL_SECONDS">
+<button id="go">生成短链</button>
+<div id="out"></div>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  try { $('bucket').value = localStorage.getItem('cf_b2_bucket') || ''; } catch(e){}
+  var out=$('out');
+  function show(ok, html){ out.style.display='block'; out.className=ok?'ok':'err'; out.innerHTML=html; }
+  $('go').addEventListener('click', async function(){
+    var pw=$('pw').value, bucket=$('bucket').value.trim(), path=$('path').value.trim(), ttl=$('ttl').value.trim();
+    if(!pw||!bucket||!path){ show(false,'密码、桶 id、对象 key 都要填'); return; }
+    try { localStorage.setItem('cf_b2_bucket', bucket); } catch(e){}
+    var body={ bucket: bucket, path: path };
+    if(ttl) body.expiresIn = parseInt(ttl,10);
+    $('go').disabled=true; show(true,'生成中…');
+    try{
+      var r=await fetch('/api/sign',{ method:'POST', headers:{ 'authorization':'Bearer '+pw, 'content-type':'application/json' }, body: JSON.stringify(body) });
+      if(r.ok){
+        var j=await r.json();
+        var exp=new Date(j.exp*1000).toLocaleString();
+        show(true, '<div id="link">'+j.url+'</div><div style="margin-top:10px"><button id="cp" type="button">复制</button> <small>过期：'+exp+'</small></div>');
+        $('cp').addEventListener('click', function(){ navigator.clipboard.writeText(j.url); $('cp').textContent='已复制'; });
+      } else {
+        var t=await r.text();
+        var msg = r.status===401 ? '密码错误' : (r.status===403 ? '桶 id 不在白名单 / 路径非法' : (r.status===500 ? '服务端配置错误' : ('失败 '+r.status)));
+        show(false, msg + (t ? ' — '+t : ''));
+      }
+    }catch(e){ show(false,'请求出错：'+e.message); }
+    finally{ $('go').disabled=false; }
+  });
+})();
+</script>
+</body>
+</html>`
+
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname
@@ -442,6 +510,17 @@ export default {
     if (path === REVOKE_PATH) {
       if (request.method !== 'POST') return noStore(405, 'Method Not Allowed')
       return handleRevoke(request, env)
+    }
+
+    if (path === (env.ADMIN_PAGE_PATH || '/admin')) {
+      if (request.method !== 'GET') return noStore(405, 'Method Not Allowed')
+      return new Response(ADMIN_HTML, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-robots-tag': 'noindex',
+        },
+      })
     }
 
     const m = path.match(ID_ROUTE)
