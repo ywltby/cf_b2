@@ -1,17 +1,23 @@
 {
   "private": true,
   "name": "cloudflare-b2",
-  "version": "1.2.0",
-  "description": "Provide access to a private Backblaze B2 bucket via a Cloudflare Worker",
+  "version": "2.0.0",
+  "description": "D1-backed short-link CDN gateway for private S3-compatible buckets via a Cloudflare Worker",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "format": "prettier --write '**/*.{js,css,json,md}'"
+    "pretest": "node scripts/check-no-buffering.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write '**/*.{js,css,json,md}'",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
   },
   "author": "Pat Patterson <pat@backblaze.com>",
   "license": "MIT",
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.6.0",
     "prettier": "^3.7.4",
+    "vitest": "~2.1.0",
     "wrangler": "^4.54.0"
   },
   "dependencies": {
