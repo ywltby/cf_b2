@@ -24,3 +24,10 @@ migrations_dir = "migrations"
 # expired rows that are never accessed again.
 [triggers]
 crons = ["0 3 * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
