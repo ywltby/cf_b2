@@ -159,6 +159,7 @@ public URL:    https://cdn.example.com/b/<our_id>
 - 不查 D1、不调用签发 API、不需要管理员鉴权。
 - `<key>` 允许没有扩展名；Worker 不根据扩展名猜测或设置 `Content-Type`。
 - `Content-Type` 完全来自对象上传时写入的 B2/S3 metadata；Worker 只透传白名单中的 `content-type`。
+- 普通 GET 成功响应会写入 Cloudflare 边缘缓存；Range 和 HEAD 仍绕过缓存。
 - `<key>` 使用同一套对象 key 安全规则：拒绝空段、`.`、`..`、控制字符和反斜杠；`%2e%2e` 这类编码内容按字面字符处理，不作为目录穿越。
 - 实际回源 key 永远是 `<B_PREFIX><key>`；非法 prefix 或桶配置会 fail-closed，不会回退到其它桶或真实路径。
 

@@ -356,7 +356,14 @@ async function handlePublicBucket(request, env, ctx, rawKey) {
   const cfg = buckets.get(bucketId)
   if (!cfg) return noStore(500, 'Server Error')
 
-  return deliverOriginObject(request, env, ctx, cfg, `${prefix}${key}`)
+  return deliverOriginObject(
+    request,
+    env,
+    ctx,
+    cfg,
+    `${prefix}${key}`,
+    bucketId,
+  )
 }
 
 // ---- id generation ----

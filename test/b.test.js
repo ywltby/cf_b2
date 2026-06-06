@@ -48,6 +48,23 @@ describe('GET|HEAD /b/<key>', () => {
     expect(res.headers.get('x-amz-request-id')).toBeNull()
   })
 
+  test('caches full public image responses at the edge', async () => {
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/image/cache-hit', method: 'GET' })
+      .reply(200, 'CACHED', {
+        headers: { 'content-type': 'image/webp' },
+      })
+      .times(1)
+
+    const first = await fetchB('/b/cache-hit')
+    expect(await first.text()).toBe('CACHED')
+
+    const second = await fetchB('/b/cache-hit')
+    expect(second.status).toBe(200)
+    expect(await second.text()).toBe('CACHED')
+  })
+
   test('passes Range and returns 206 without caching', async () => {
     fetchMock
       .get(ORIGIN)

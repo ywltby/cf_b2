@@ -98,7 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - Range 请求严格要求上游返回 `206`；上游忽略 Range 返回 `200` 时会 abort 并重试，耗尽后返回 `502`，绝不把整文件返回给 Range 请求。
 - HEAD 请求按 GET 签名回源，拿到元数据后 abort body，返回无 body 响应。
 - 普通 GET 先查 D1、校验 exp，再查 Cache API；内部缓存键按 `bucketId+key` 去重。
-- `/b/` 不使用 D1 或签发状态，配置缺失或非法时 fail-closed；`Content-Type` 不猜测，完全来自上游对象 metadata。
+- `/b/` 不使用 D1 或签发状态，配置缺失或非法时 fail-closed；普通 GET 成功响应写入边缘缓存，Range/HEAD 绕过缓存；`Content-Type` 不猜测，完全来自上游对象 metadata。
 - 过期普通链接访问时 best-effort 惰性删除；Cron 批量删除 `exp > 0 AND exp < now`；永久链接不会被清理。
 
 ## 测试覆盖

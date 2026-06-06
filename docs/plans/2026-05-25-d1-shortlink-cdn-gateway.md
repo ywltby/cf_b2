@@ -143,7 +143,7 @@ default:    image/<key>
 2. 校验 `B_BUCKET_ID`、`B_PREFIX` 和 `BUCKETS`。
 3. 规范化 URL key，拒绝空段、`.`、`..`、反斜杠和控制字符。
 4. 拼成 `<B_PREFIX><key>`，保证只能命中固定 prefix 下对象。
-5. 调用同一套 SigV4 回源交付逻辑；Range、HEAD、错误脱敏和响应头白名单与 `/s/` 一致。
+5. 调用同一套 SigV4 回源交付逻辑；普通 GET 成功响应写入边缘缓存，Range、HEAD、错误脱敏和响应头白名单与 `/s/` 一致。
 
 ## 安全规则
 
@@ -171,7 +171,7 @@ default:    image/<key>
 npm test
 ```
 
-测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 11 个测试文件、53 个用例：
+测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 11 个测试文件、54 个用例：
 
 - `test/routing.test.js`：路由、方法限制、默认拒绝。
 - `test/sign.test.js`：管理员鉴权、bucket/key 校验、TTL、永久链接、互斥参数、配置 fail-closed。
@@ -182,7 +182,7 @@ npm test
 - `test/revoke.test.js`：撤销短链。
 - `test/scheduled.test.js`：Cron 清理保留永久链接。
 - `test/admin.test.js`：`/admin` 页面存在且不嵌入 secret。
-- `test/b.test.js`：`/b/` 正常流式、Range、HEAD、方法限制、key/prefix 配置越界拒绝。
+- `test/b.test.js`：`/b/` 正常流式、边缘缓存、Range、HEAD、方法限制、key/prefix 配置越界拒绝。
 - `test/smoke.test.js`：未知路径拒绝。
 
 完成行为变更前应至少运行：
