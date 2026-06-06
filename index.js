@@ -117,7 +117,7 @@ async function handleDeliver(request, env, ctx, id) {
   }
   const now = Math.floor(Date.now() / 1000)
   if (!row) return noStore(404, 'Not Found')
-  if (row.exp < now) {
+  if (row.exp !== 0 && row.exp < now) {
     deleteLinkBestEffort(ctx, env, id) // lazy cleanup; never blocks / never throws into response
     return noStore(404, 'Not Found')
   }
@@ -370,18 +370,31 @@ async function handleSign(request, env) {
   const key = normalizeKey(body.path)
   if (!key) return jsonResponse({ error: 'invalid path' }, 403)
 
-  let ttl = intVar(env, 'TOKEN_TTL_SECONDS', 3600, 1, 31536000)
-  if (body.expiresIn !== undefined) {
-    if (
-      !Number.isInteger(body.expiresIn) ||
-      body.expiresIn <= 0 ||
-      body.expiresIn > 31536000
-    ) {
-      return jsonResponse({ error: 'invalid expiresIn' }, 403)
-    }
-    ttl = body.expiresIn
+  if (body.permanent !== undefined && typeof body.permanent !== 'boolean') {
+    return jsonResponse({ error: 'invalid permanent' }, 403)
   }
-  const exp = Math.floor(Date.now() / 1000) + ttl
+  const permanent = body.permanent === true
+  if (permanent && body.expiresIn !== undefined) {
+    return jsonResponse({ error: 'expiresIn conflicts with permanent' }, 403)
+  }
+
+  let exp
+  if (permanent) {
+    exp = 0
+  } else {
+    let ttl = intVar(env, 'TOKEN_TTL_SECONDS', 3600, 1, 31536000)
+    if (body.expiresIn !== undefined) {
+      if (
+        !Number.isInteger(body.expiresIn) ||
+        body.expiresIn <= 0 ||
+        body.expiresIn > 31536000
+      ) {
+        return jsonResponse({ error: 'invalid expiresIn' }, 403)
+      }
+      ttl = body.expiresIn
+    }
+    exp = Math.floor(Date.now() / 1000) + ttl
+  }
   const idLen = intVar(env, 'TOKEN_ID_LENGTH', 16, 12, 64) // floor 12 (~72bit); unguessable, no rate limit
 
   let id
@@ -400,7 +413,10 @@ async function handleSign(request, env) {
     }
   }
   const origin = new URL(request.url).origin
-  return jsonResponse({ url: `${origin}/s/${id}`, id, exp })
+  const url = `${origin}/s/${id}`
+  return permanent
+    ? jsonResponse({ url, id, exp: null, permanent: true })
+    : jsonResponse({ url, id, exp })
 }
 
 // ---- revoke ----
@@ -427,7 +443,9 @@ async function handleRevoke(request, env) {
 // ---- cleanup (Cron) ----
 export async function cleanupExpired(env) {
   const now = Math.floor(Date.now() / 1000)
-  await env.DB.prepare('DELETE FROM links WHERE exp < ?').bind(now).run()
+  await env.DB.prepare('DELETE FROM links WHERE exp > 0 AND exp < ?')
+    .bind(now)
+    .run()
 }
 
 // Admin signing UI (static, no secrets; same-origin POST to /api/sign).
@@ -444,6 +462,8 @@ const ADMIN_HTML = `<!doctype html>
   h1 { font-size: 20px; }
   label { display:block; margin: 14px 0 4px; font-size: 13px; color:#888; }
   input { width:100%; box-sizing:border-box; padding:10px; font-size:14px; border:1px solid #999; border-radius:8px; background:transparent; color:inherit; }
+  .check { display:flex; align-items:center; gap:8px; color:inherit; }
+  .check input { width:auto; }
   button { margin-top:18px; padding:10px 18px; font-size:15px; border:0; border-radius:8px; background:#3b82f6; color:#fff; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   #out { margin-top:20px; padding:14px; border-radius:8px; word-break:break-all; font-size:14px; display:none; }
@@ -463,6 +483,7 @@ const ADMIN_HTML = `<!doctype html>
 <input id="path" placeholder="path/to/file.png">
 <label>有效期（秒，留空用默认）</label>
 <input id="ttl" type="number" min="1" placeholder="默认 TOKEN_TTL_SECONDS">
+<label class="check"><input id="permanent" type="checkbox">永久链接</label>
 <button id="go">生成短链</button>
 <div id="out"></div>
 <script>
@@ -470,19 +491,25 @@ const ADMIN_HTML = `<!doctype html>
   var $=function(id){return document.getElementById(id)};
   try { $('bucket').value = localStorage.getItem('cf_b2_bucket') || ''; } catch(e){}
   var out=$('out');
+  var ttlInput=$('ttl'), permanentInput=$('permanent');
   function show(ok, html){ out.style.display='block'; out.className=ok?'ok':'err'; out.innerHTML=html; }
+  permanentInput.addEventListener('change', function(){
+    ttlInput.disabled = permanentInput.checked;
+    if (permanentInput.checked) ttlInput.value = '';
+  });
   $('go').addEventListener('click', async function(){
-    var pw=$('pw').value, bucket=$('bucket').value.trim(), path=$('path').value.trim(), ttl=$('ttl').value.trim();
+    var pw=$('pw').value, bucket=$('bucket').value.trim(), path=$('path').value.trim(), ttl=ttlInput.value.trim(), permanent=permanentInput.checked;
     if(!pw||!bucket||!path){ show(false,'密码、桶 id、对象 key 都要填'); return; }
     try { localStorage.setItem('cf_b2_bucket', bucket); } catch(e){}
     var body={ bucket: bucket, path: path };
-    if(ttl) body.expiresIn = parseInt(ttl,10);
+    if(permanent) body.permanent = true;
+    else if(ttl) body.expiresIn = parseInt(ttl,10);
     $('go').disabled=true; show(true,'生成中…');
     try{
       var r=await fetch('/api/sign',{ method:'POST', headers:{ 'authorization':'Bearer '+pw, 'content-type':'application/json' }, body: JSON.stringify(body) });
       if(r.ok){
         var j=await r.json();
-        var exp=new Date(j.exp*1000).toLocaleString();
+        var exp=j.permanent ? '永久' : new Date(j.exp*1000).toLocaleString();
         show(true, '<div id="link">'+j.url+'</div><div style="margin-top:10px"><button id="cp" type="button">复制</button> <small>过期：'+exp+'</small></div>');
         $('cp').addEventListener('click', function(){ navigator.clipboard.writeText(j.url); $('cp').textContent='已复制'; });
       } else {

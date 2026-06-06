@@ -51,6 +51,21 @@ describe('GET /s/<id> happy path', () => {
     expect(res.headers.get('x-amz-id-2')).toBeNull()
   })
 
+  test('permanent link with exp=0 streams normally', async () => {
+    await insertLink('permanent001', 'b2test', 'forever.bin', 0)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/forever.bin', method: 'GET' })
+      .reply(200, 'FOREVER', {
+        headers: { 'content-type': 'application/octet-stream' },
+      })
+
+    const res = await SELF.fetch('https://cdn.example.com/s/permanent001')
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('FOREVER')
+  })
+
   test('keys with special chars are RFC3986-encoded into the origin URL', async () => {
     await insertLink('id0000000004', 'b2test', 'a dir/b?c#d.png', FUTURE)
     // 若 aws4fetch 对 S3 路径双重编码，这里的 path 不匹配 -> fetchMock 抛错 -> 测试失败（正是我们要的暴露）

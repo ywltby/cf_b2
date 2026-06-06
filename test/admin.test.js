@@ -11,6 +11,7 @@ test('GET /admin serves the signing HTML page', async () => {
   const body = await res.text()
   expect(body).toContain('短链签发')
   expect(body).toContain('/api/sign')
+  expect(body).toContain('id="permanent"')
   // page must not embed any secret or backend identifier
   expect(body).not.toContain('applicationKey')
   expect(body).not.toContain('backblazeb2.com')

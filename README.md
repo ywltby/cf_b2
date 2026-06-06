@@ -1,8 +1,8 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「带过期时间的不可枚举短链」访问。
+通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接。
 
-用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期时间」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
+用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
 
 > 基于官方样例 [backblaze-b2-samples/cloudflare-b2](https://github.com/backblaze-b2-samples/cloudflare-b2) 重构而来（v2，与 1.x 不兼容）。
 
@@ -13,17 +13,19 @@
 - **不泄露后端**：错误响应不带 body、不透传 B2/XML 错误体与 `x-amz-*` 等头；成功响应仅白名单透传 `content-type/content-length/content-range/accept-ranges/etag/last-modified`。
 - **稳定桶 id**：D1 存 `bucket_id`（稳定字符串，非数组下标），重排/增减桶不会让旧短链指向错桶。
 - **对象 key 安全编码**：按段 RFC3986 编码，拒绝 `..`/`.`/空段/控制字符；`?`/`#`/空格/`%2e%2e` 均作字面字符处理。
-- 凭证只存 secret（`BUCKETS`/`ADMIN_PASSWORD`），D1 只存桶 id + key，不存任何密钥。
+- **永久链接显式标记**：D1 中 `exp = 0` 表示永不过期；普通链接使用 Unix 秒级过期时间。
+- 凭证只存 secret（`BUCKETS`/`ADMIN_PASSWORD`），D1 只存桶 id + key + 过期信息，不存任何密钥。
 
 ## 路由
 
-| 方法 + 路径         | 行为                                           |
-| ------------------- | ---------------------------------------------- |
-| `POST /api/sign`    | 管理员鉴权 → 生成短链 → `{url, id, exp}`       |
-| `POST /api/revoke`  | 管理员鉴权 → 删除某 id                         |
-| `GET\|HEAD /s/<id>` | 查 D1 → 流式交付（支持 Range/视频/多线程下载） |
-| 已知路径用错方法    | `405`                                          |
-| 其它任意路径        | `403`（含直接访问 `/a.png`、`/<bucket>/key`）  |
+| 方法 + 路径         | 行为                                                    |
+| ------------------- | ------------------------------------------------------- |
+| `POST /api/sign`    | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应 |
+| `POST /api/revoke`  | 管理员鉴权 → 删除某 id                                  |
+| `GET /admin`        | 简易同源签发页面（不嵌入 secret）                       |
+| `GET\|HEAD /s/<id>` | 查 D1 → 流式交付（支持 Range/视频/多线程下载）          |
+| 已知路径用错方法    | `405`                                                   |
+| 其它任意路径        | `403`（含直接访问 `/a.png`、`/<bucket>/key`）           |
 
 ## 配置
 
@@ -93,6 +95,8 @@ cp .dev.vars.template .dev.vars   # 填 BUCKETS / ADMIN_PASSWORD（.dev.vars 已
 npx wrangler dev
 ```
 
+仓库当前 `wrangler.toml` 绑定了自定义域名 `s.514996.xyz`，部署时以本地配置覆盖 Cloudflare Dashboard 中同一 Worker 的远端配置。
+
 ## 使用
 
 ### 签发短链
@@ -105,11 +109,24 @@ curl -X POST https://cdn.example.com/api/sign \
 # -> {"url":"https://cdn.example.com/s/aB3xK9_qZ1mP7nR2","id":"aB3xK9_qZ1mP7nR2","exp":1761000000}
 ```
 
+永久链接：
+
+```bash
+curl -X POST https://cdn.example.com/api/sign \
+  -H "authorization: Bearer $ADMIN_PASSWORD" \
+  -H "content-type: application/json" \
+  -d '{"bucket":"b2main","path":"/path/to/file.png","permanent":true}'
+# -> {"url":"https://cdn.example.com/s/aB3xK9_qZ1mP7nR2","id":"aB3xK9_qZ1mP7nR2","exp":null,"permanent":true}
+```
+
 请求体字段：
 
 - `bucket`：`BUCKETS` 里的稳定 `id`。
 - `path`：对象 key（前导 `/` 可选）。
 - `expiresIn`（可选）：有效秒数，覆盖 `TOKEN_TTL_SECONDS`。
+- `permanent`（可选）：传 `true` 时生成永久链接，不能和 `expiresIn` 同时使用；响应为 `{url,id,exp:null,permanent:true}`。
+
+也可以访问 `/admin` 使用同源签发页面；页面只向 `/api/sign` 发请求，不包含后端 endpoint、bucket name 或密钥。
 
 ### 访问 / 撤销
 
@@ -134,6 +151,7 @@ npm test          # 流式守卫 + vitest（@cloudflare/vitest-pool-workers，�
 
 - **惰性**：访问到已过期短链时即 best-effort 删除该行（不阻塞响应）。
 - **Cron**：`wrangler.toml` 的 `[triggers] crons` 每日批量清扫从未被访问的过期行。
+- **永久链接**：D1 中 `exp = 0` 表示永不过期，不会被惰性删除或 Cron 清扫。
 
 ## CI
 

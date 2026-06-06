@@ -14,12 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Added
 
 - `POST /api/sign`：管理员密码（secret `ADMIN_PASSWORD`，`Authorization: Bearer` + SHA-256 常量时间比较）签发不可枚举短链 `/s/<id>`；定位信息（桶 id + 对象 key + 过期）存 D1，对用户不可见、不可改。
+- 永久短链：`POST /api/sign` 支持 `permanent:true`，D1 以 `exp=0` 表示永不过期，交付和清理逻辑会保留该类链接。
 - `POST /api/revoke`：撤销短链（删除 D1 行，立即失效）。
+- `/admin`：同源静态签发页面，可填写管理员密码、桶 id、对象 key、TTL 或勾选永久链接；页面不嵌入 secret 或后端标识。
 - 多桶 / 多服务商：secret `BUCKETS` 为桶配置组数组 `{id,name,endpoint,region,keyId,applicationKey}`，按**稳定 id**（非数组下标）引用；endpoint 用 `new URL` 解析，支持 scheme 与任意端口（B2 / R2 / AWS S3 / MinIO，http 仅可信网络）。
 - 流式交付：全程 `new Response(upstream.body)` 不缓冲；Range → 206（透传 content-range/accept-ranges）、保留大文件重试、HEAD 不下载全量；适配视频 / 音频 / 多线程下载。
 - 过期清理双保险：交付层命中即惰性删除 + 每日 Cron 批量清扫。
 - 缓存：按内部 `bucketId+key` 键去重（同文件不同短链共用缓存），先鉴权后查缓存。
-- 测试：vitest + `@cloudflare/vitest-pool-workers`（39 用例，本地 D1 + mock 回源），含禁止读取上游 body 的静态「流式守卫」。
+- 测试：vitest + `@cloudflare/vitest-pool-workers`（44 用例，本地 D1 + mock 回源），含禁止读取上游 body 的静态「流式守卫」。
 
 #### Changed
 

@@ -66,6 +66,35 @@ describe('POST /api/sign', () => {
     expect(exp).toBeLessThanOrEqual(before + 61)
   })
 
+  test('permanent link writes exp=0 and returns no expiry timestamp', async () => {
+    const res = await sign({
+      bucket: 'b2test',
+      path: '/a.png',
+      permanent: true,
+    })
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json).toMatchObject({ exp: null, permanent: true })
+    expect(json.id).toHaveLength(12)
+    const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?')
+      .bind(json.id)
+      .first()
+    expect(row).toMatchObject({ bucket_id: 'b2test', p: 'a.png', exp: 0 })
+  })
+
+  test('permanent and expiresIn are mutually exclusive', async () => {
+    const res = await sign({
+      bucket: 'b2test',
+      path: '/a.png',
+      expiresIn: 60,
+      permanent: true,
+    })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({
+      error: 'expiresIn conflicts with permanent',
+    })
+  })
+
   test('unknown bucket id -> 403', async () => {
     expect((await sign({ bucket: 'nope', path: '/a.png' })).status).toBe(403)
     expect((await sign({ bucket: 0, path: '/a.png' })).status).toBe(403) // 下标不再被接受
