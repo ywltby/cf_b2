@@ -1,80 +1,136 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
 ## 项目目标
 
-通过 Cloudflare Worker 代理访问一个或多个**私有** Backblaze B2 存储桶，使桶内对象只能经由 Cloudflare 公开访问。Worker 用 B2 应用密钥对每个上游请求做 AWS Signature V4 签名，浏览器/客户端本身不持有密钥。
+这是一个 Cloudflare Worker D1 短链 CDN 网关。管理员通过 `POST /api/sign` 生成不可枚举短链 `/s/<id>`；Worker 在 D1 中把短链 id 映射到 `{bucket_id, p, exp}`，再用 `aws4fetch` 对私有 S3 兼容存储回源请求做 AWS Signature V4 签名并流式交付文件。
+
+当前实现支持：
+
+- 多个私有 S3 兼容桶：Backblaze B2、Cloudflare R2、AWS S3、MinIO 等。
+- 普通过期短链：D1 `exp` 为 Unix 秒。
+- 永久短链：`POST /api/sign` 传 `permanent: true`，D1 `exp = 0`。
+- `GET|HEAD /s/<id>` 流式交付，支持 Range、视频、多线程下载。
+- `POST /api/revoke` 撤销短链。
+- `GET /admin` 同源静态签发页面，不嵌入 secret。
 
 ## 技术栈
 
-- 运行时: Cloudflare Workers (ES module worker，`export default { fetch }`)
-- 语言: 原生 JavaScript（无 TypeScript、无构建步骤）
-- 依赖: `aws4fetch`（对上游 S3 兼容请求做 SigV4 签名）
-- 工具链: `wrangler` 4.x（本地开发 / 部署）、`prettier`（格式化）
+- 运行时：Cloudflare Workers ES module worker，入口为 `index.js`。
+- 语言：原生 JavaScript，无 TypeScript、无构建步骤。
+- 存储：Cloudflare D1，binding 为 `DB`。
+- 签名：`aws4fetch`，对上游 S3 兼容请求做 SigV4。
+- 工具链：Wrangler 4.x、Prettier、Vitest、`@cloudflare/vitest-pool-workers`。
 
 ## 常用命令
 
-- `npm install` — 安装依赖（部署前必须先执行）
-- `npx wrangler dev` — 本地开发服务器（http，端口 8787）
-- `npx wrangler deploy` — 部署到 Cloudflare
-- `npx wrangler deploy --dry-run` — 校验配置但不部署（CI 即跑这个）
-- `npm run format` — 用 prettier 格式化 `**/*.{js,css,json,md}`
-- 设置密钥: `echo "<b2 application key>" | npx wrangler secret put B2_APPLICATION_KEY`
+- `npm install`：安装依赖。
+- `npm run dev` / `npx wrangler dev`：本地开发服务器。
+- `npm run deploy` / `npx wrangler deploy`：部署到 Cloudflare。
+- `npx wrangler deploy --dry-run`：打包和配置校验，不部署。
+- `npm test`：先运行流式守卫，再运行 Vitest Worker 测试。
+- `npm run test:watch`：监听模式跑测试。
+- `npm run format`：Prettier 格式化 `**/*.{js,css,json,md}`。
 
-注意 `package.json` 里的 `test` 脚本是占位符（`exit 1`），本仓库**没有测试框架**，不要假装能跑测试。
+`npm test` 会清空代理环境变量，避免 Miniflare 出站 fetch 被本机代理挂住。
 
-## 配置与密钥（关键）
+## 配置与密钥
 
-- `wrangler.toml` 被 `.gitignore` 忽略，仓库内只有它作为模板的内容；本地需自行填写 `B2_APPLICATION_KEY_ID`、`B2_ENDPOINT`、`BUCKET_NAME` 等 `[vars]`。
-- `B2_APPLICATION_KEY` 是**密钥**，绝不写进 `wrangler.toml`：生产用 `wrangler secret put`，本地开发放进 `.dev.vars`（由 `.dev.vars.template` 复制而来，也被 gitignore）。Wrangler 本地服务器读 `wrangler.toml` 的 vars 但读不到 secret，靠 `.dev.vars` 补齐。
-- `BUCKET_NAME` 三种模式：固定桶名 / `$path`（取 URL 路径首段为桶名）/ `$host`（取 hostname 首个子域为桶名）。`$host` 模式必须为每个桶名配 Route 或 Custom Domain。
-- 桶虽私有，但 Cloudflare 默认不缓存带 `Authorization` 头的响应，所以需在 B2 桶的 Bucket Info 里设 `{"Cache-Control":"public"}` 才能缓存。
+`wrangler.toml` 当前配置：
 
-## 架构（`index.js`，单文件）
+- Worker 名称：`cf_b2`
+- 入口：`index.js`
+- 自定义域名：`s.514996.xyz`
+- D1：`DB` -> `cdn-links`
+- Cron：每天 `0 3 * * *` 清理过期行
 
-请求流：客户端 → Worker → 签名后转发到 B2 S3 端点 → 原样返回。要点：
+Secrets 不写入 `wrangler.toml`：
 
-- **方法限制**: 仅允许 `GET` / `HEAD`，其余返回 405。
-- **HEAD 特殊处理**: Cloudflare 会把上游 HEAD 改成 GET 而破坏签名（issue #18），所以所有上游请求都以 `GET` 签名发出；若原始请求是 HEAD，则用 `createHeadResponse` 返回无 body 的响应。
-- **头部过滤** (`filterHeaders`): 剔除 `cf-*`、`UNSIGNABLE_HEADERS`（如 `accept-encoding`、条件请求头等，因 Cloudflare 不一定原样上传，会让签名失效）；若配置了 `ALLOWED_HEADERS`，则只保留白名单内的头。改签名相关逻辑时务必理解这一层，否则会产生 403。
-- **Range 请求重试**: 大文件（约 >2GB）时 Cloudflare 可能忽略 range 返回整个文件。代码检测响应缺少 `content-range` 头时 abort 并重试，最多 `RANGE_RETRY_ATTEMPTS`(3) 次。
-- **rclone 模式** (`RCLONE_DOWNLOAD`): 为 true 时剥掉路径里的 `file/`（或 `file/{bucket}/`）前缀，适配 rclone 的 `--b2-download-url`。
-- **list bucket 控制** (`isListBucketRequest` + `ALLOW_LIST_BUCKET`): 默认拒绝列桶请求（404），需显式开启。
+- `BUCKETS`：JSON 数组，每项 `{id,name,endpoint,region,keyId,applicationKey}`。
+- `ADMIN_PASSWORD`：签发/撤销 API 密码，按 API key 对待。
 
-## CI
+本地开发复制 `.dev.vars.template` 为 `.dev.vars` 并填入上述 secret。D1 只存稳定桶 id、对象 key 和过期信息，不存任何密钥。
 
-`.github/workflows/wrangler_dry_run.yml`：push 到 `main` 时跑 `wrangler deploy --dry-run`（需 `CLOUDFLARE_API_TOKEN` secret）。该 workflow 显式安装 wrangler 4.x，绕过 wrangler-action 自带的 3.x。
+## 数据模型
+
+迁移文件：`migrations/0001_init.sql`。
+
+```sql
+CREATE TABLE IF NOT EXISTS links (
+  id        TEXT PRIMARY KEY,
+  bucket_id TEXT NOT NULL,
+  p         TEXT NOT NULL,
+  exp       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
+```
+
+语义：
+
+- `id`：短链随机 id。
+- `bucket_id`：`BUCKETS` 中稳定的桶 id，不是数组下标。
+- `p`：规范化后的对象 key，无前导斜杠。
+- `exp > 0`：Unix 秒过期时间。
+- `exp = 0`：永久链接。
+
+## 路由与行为
+
+- `POST /api/sign`：管理员鉴权，签发短链。
+  - 普通响应：`{url,id,exp}`
+  - 永久响应：`{url,id,exp:null,permanent:true}`
+  - `permanent:true` 和 `expiresIn` 互斥。
+- `POST /api/revoke`：管理员鉴权，删除 D1 行，返回 `{deleted:boolean}`。
+- `GET /admin`：返回静态签发页面。
+- `GET|HEAD /s/<id>`：查 D1，校验过期，按桶配置签名回源并流式返回。
+- 已知路径用错方法返回 `405`。
+- 其它路径返回 `403`。
+
+## 安全与交付规则
+
+- fail-closed：D1 错误、配置非法、上游异常一律拒绝，不回退到真实路径。
+- 不泄露后端：交付端错误响应无 body，不透传 B2/XML 错误体、`x-amz-*`、endpoint、bucket name 或 key。
+- 成功响应只白名单透传 `content-type`、`content-length`、`content-range`、`accept-ranges`、`etag`、`last-modified`。
+- 对象 key 规范化：拒绝控制字符、反斜杠、空段、`.`、`..`；按段 RFC3986 编码。
+- Range 请求严格要求上游返回 `206`；上游忽略 Range 返回 `200` 时会 abort 并重试，耗尽后返回 `502`，绝不把整文件返回给 Range 请求。
+- HEAD 请求按 GET 签名回源，拿到元数据后 abort body，返回无 body 响应。
+- 普通 GET 先查 D1、校验 exp，再查 Cache API；内部缓存键按 `bucketId+key` 去重。
+- 过期普通链接访问时 best-effort 惰性删除；Cron 批量删除 `exp > 0 AND exp < now`；永久链接不会被清理。
+
+## 测试覆盖
+
+测试目录：`test/`。
+
+当前测试覆盖：
+
+- 路由默认拒绝和方法限制。
+- 签发鉴权、bucket/key 校验、TTL、永久链接、互斥参数。
+- 流式交付、头部脱敏、内部缓存键、特殊字符编码。
+- Range、HEAD、上游错误、D1 fail-closed、过期惰性删除。
+- 撤销、Cron 清理、`/admin` 页面。
+
+`scripts/check-no-buffering.mjs` 是静态流式守卫：禁止 Worker 读取上游响应 body，例如 `.arrayBuffer()`、`.blob()`、非 `request` 的 `.text()` / `.json()`。
 
 ## 代码风格
 
-遵循 `.prettierrc`：单引号、无分号、`trailingComma: all`、`tabWidth: 2`、`printWidth: 80`。改完 JS 用 `npm run format` 保持一致。
+遵循 `.prettierrc`：单引号、无分号、`trailingComma: all`、`tabWidth: 2`、`printWidth: 80`。改完 JS/Markdown/JSON 后运行 `npm run format`。
 
-## 基本约定
+## 协作约定
 
-- 所有文件统一 UTF-8 编码保存。
-- 本地终端是 Windows PowerShell；连续执行多条命令时优先分开执行或用 `;`，不要用 `&&`。
-- 临时文件用 `C:\Users\ysy13\AppData\Local\Temp\`，不要用 `/tmp`。
-
-## 先计划后执行
-
-- **新增功能或修改逻辑前，先制定 plan 并提交用户确认，确认后再写代码。** 禁止未经确认直接实现。
-- plan 应包含：变更目标、涉及文件、关键实现思路、验证方式。
-- 极小改动（typo、改一行注释）可口头说明后直接执行；凡涉及新增函数、修改逻辑、跨文件改动一律走 plan。
-- 用户明确说"直接改"、"不用 plan"时可豁免。
-- 可跳过 plan 直接修复的情况仅限：运行报错、CI 红灯、文案拼写错误、格式化。
-
-## 协作原则
-
-- 用户的问题若基于错误前提，明确指出。
-- 不在代码、commit message、注释、文档中声明或暗示由 AI 生成；commit message 不加任何 AI 署名尾缀。
-- 先理解现有代码和文档再改动；不要为"整理"顺手重构无关内容。
+- 先理解现有代码和测试再改动。
+- 涉及行为变更时先补测试，再改实现。
+- 用户可见行为变更同步更新 `README.md` 和 `CHANGELOG.md`。
+- 不要顺手重构无关内容。
+- 不要在代码、文档、commit message 中声明或暗示由 AI 生成。
+- 本地终端是 Windows PowerShell；命令优先分开执行。
 
 ## 提交流程
 
-- 完成修改后先自查，再 `git add` + `git commit`，最后向用户汇报。
-- commit message 遵循 Conventional Commits，且必须有中文说明（例如 `fix(签名): ...`），正文说明改了什么、为什么改、影响范围。
-- 一个 commit 只解决一类问题，禁止把无关改动揉成一个提交。
-- `commit / push / 远端校验` 严格串行，禁止并行。
-- 严禁 `--no-verify`。
-- 有用户可见的行为变更时，同步更新 `CHANGELOG.md` 的 `[Unreleased]` 段（本仓库遵循 Keep a Changelog + 语义化版本）。
+除非用户另有要求，完成修改后：
+
+1. `npm run format`
+2. `npm test`
+3. 必要时 `npx wrangler deploy --dry-run`
+4. 汇报改动和验证结果
+
+如用户要求提交，commit message 使用 Conventional Commits，并包含中文说明。
