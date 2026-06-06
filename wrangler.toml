@@ -9,6 +9,8 @@ routes = [{ pattern = "s.514996.xyz", custom_domain = true }]
 CACHE_TTL_SECONDS = "86400"
 TOKEN_TTL_SECONDS = "3600"
 TOKEN_ID_LENGTH = "16"
+B_BUCKET_ID = "1145141919810"
+B_PREFIX = "image/"
 
 # Secrets (set via `wrangler secret put`, do NOT put values here):
 #   BUCKETS         JSON array: [{"id","name","endpoint","region","keyId","applicationKey"}]

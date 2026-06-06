@@ -4,12 +4,13 @@
 
 ## 目标
 
-通过 Cloudflare Worker 为一个或多个私有 S3 兼容存储桶提供不可枚举短链访问。管理员签发 `/s/<id>` 短链，Worker 通过 D1 把 id 解析成桶 id、对象 key 和过期信息，再用 AWS SigV4 签名流式回源。
+通过 Cloudflare Worker 为一个或多个私有 S3 兼容存储桶提供不可枚举短链访问。管理员签发 `/s/<id>` 短链，Worker 通过 D1 把 id 解析成桶 id、对象 key 和过期信息，再用 AWS SigV4 签名流式回源。另提供 `/b/<key>` 无状态公开图片反代路径，固定映射到配置桶的 `image/<key>` 一类对象。
 
 目标约束：
 
 - 对用户隐藏 endpoint、bucket name、对象 key 和所有密钥。
 - 普通链接按 Unix 秒过期，永久链接显式使用 `exp = 0`。
+- `/b/` 不查 D1、不签发、不鉴权，只从固定桶和固定 prefix 反代公开图片。
 - 成功交付全程流式，不缓冲上游 body。
 - 支持 Range、HEAD、视频播放和多线程下载。
 - fail-closed：D1、配置或上游异常时拒绝请求，不回退到真实路径。
@@ -36,6 +37,8 @@
 | var    | `CACHE_TTL_SECONDS` | `"86400"`，成功 GET 响应的 `max-age` |
 | var    | `TOKEN_TTL_SECONDS` | `"3600"`，普通短链默认有效秒数       |
 | var    | `TOKEN_ID_LENGTH`   | `"16"`，短 id 字符数，代码允许 12-64 |
+| var    | `B_BUCKET_ID`       | `"b2main"`，`/b/` 固定使用的桶 id    |
+| var    | `B_PREFIX`          | `"image/"`，`/b/` 固定对象前缀       |
 | D1     | `DB`                | `cdn-links`                          |
 | Cron   | `[triggers]`        | `0 3 * * *`，每日清理过期普通链接    |
 
@@ -70,14 +73,15 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 ## 路由
 
-| 方法 + 路径         | 行为                   |
-| ------------------- | ---------------------- |
-| `POST /api/sign`    | 管理员鉴权，生成短链   |
-| `POST /api/revoke`  | 管理员鉴权，删除 D1 行 |
-| `GET /admin`        | 静态同源签发页面       |
-| `GET\|HEAD /s/<id>` | 查 D1 并流式交付       |
-| 已知路径用错方法    | `405`                  |
-| 其它路径            | `403`                  |
+| 方法 + 路径          | 行为                   |
+| -------------------- | ---------------------- |
+| `POST /api/sign`     | 管理员鉴权，生成短链   |
+| `POST /api/revoke`   | 管理员鉴权，删除 D1 行 |
+| `GET /admin`         | 静态同源签发页面       |
+| `GET\|HEAD /s/<id>`  | 查 D1 并流式交付       |
+| `GET\|HEAD /b/<key>` | 无状态公开图片反代     |
+| 已知路径用错方法     | `405`                  |
+| 其它路径             | `403`                  |
 
 签发普通链接：
 
@@ -110,6 +114,16 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 `permanent:true` 和 `expiresIn` 互斥；同时传会返回 `403`。
 
+`/b/<key>` 映射：
+
+```text
+URL:        /b/<key>
+origin key: <B_PREFIX><key>
+default:    image/<key>
+```
+
+`key` 无扩展名是预期行为。Worker 不根据扩展名猜测或设置 `Content-Type`；类型完全由对象上传时写入的 S3/B2 metadata 承载，并经白名单响应头透传。
+
 ## 交付流程
 
 1. 匹配 `/s/<id>`，只允许 GET 或 HEAD。
@@ -123,6 +137,14 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 9. 普通 GET 先查 Cache API，miss 后签名回源并 `new Response(resp.body, ...)` 流式返回。
 10. 成功普通 GET 用 `ctx.waitUntil(cache.put(...))` 异步写缓存。
 
+`/b/` 交付流程：
+
+1. 匹配 `/b/<key>`，只允许 GET 或 HEAD。
+2. 校验 `B_BUCKET_ID`、`B_PREFIX` 和 `BUCKETS`。
+3. 规范化 URL key，拒绝空段、`.`、`..`、反斜杠和控制字符。
+4. 拼成 `<B_PREFIX><key>`，保证只能命中固定 prefix 下对象。
+5. 调用同一套 SigV4 回源交付逻辑；Range、HEAD、错误脱敏和响应头白名单与 `/s/` 一致。
+
 ## 安全规则
 
 - D1 错误返回 `503`，不回源。
@@ -133,6 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - 不透传 `x-amz-*`、XML 错误体、endpoint、bucket name、对象 key、密钥。
 - 对象 key 拒绝控制字符、反斜杠、空段、`.`、`..`，并按段 RFC3986 编码。
 - Range 请求如果上游忽略 Range 返回 `200`，最多重试 3 次；耗尽后取消 body 并返回 `502`。
+- `/b/` 配置缺失或非法时返回无 body 错误响应，不回退到其它桶或真实路径。
 
 ## 清理策略
 
@@ -148,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 npm test
 ```
 
-测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 10 个测试文件、44 个用例：
+测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 11 个测试文件、53 个用例：
 
 - `test/routing.test.js`：路由、方法限制、默认拒绝。
 - `test/sign.test.js`：管理员鉴权、bucket/key 校验、TTL、永久链接、互斥参数、配置 fail-closed。
@@ -159,6 +182,7 @@ npm test
 - `test/revoke.test.js`：撤销短链。
 - `test/scheduled.test.js`：Cron 清理保留永久链接。
 - `test/admin.test.js`：`/admin` 页面存在且不嵌入 secret。
+- `test/b.test.js`：`/b/` 正常流式、Range、HEAD、方法限制、key/prefix 配置越界拒绝。
 - `test/smoke.test.js`：未知路径拒绝。
 
 完成行为变更前应至少运行：

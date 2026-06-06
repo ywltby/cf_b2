@@ -1,8 +1,10 @@
 import { AwsClient } from 'aws4fetch'
 
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
+const B_ROUTE = /^\/b\/(.+)$/
 const SIGN_PATH = '/api/sign'
 const REVOKE_PATH = '/api/revoke'
+const BUCKET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 const PASS_THROUGH_HEADERS = [
   'content-type',
   'content-length',
@@ -108,30 +110,7 @@ async function fetchRange(client, url, rangeHeader) {
   return response
 }
 
-async function handleDeliver(request, env, ctx, id) {
-  let row
-  try {
-    row = await resolveLink(env, id)
-  } catch {
-    return noStore(503, 'Service Unavailable')
-  }
-  const now = Math.floor(Date.now() / 1000)
-  if (!row) return noStore(404, 'Not Found')
-  if (row.exp !== 0 && row.exp < now) {
-    deleteLinkBestEffort(ctx, env, id) // lazy cleanup; never blocks / never throws into response
-    return noStore(404, 'Not Found')
-  }
-
-  let buckets
-  try {
-    buckets = getBuckets(env)
-  } catch {
-    return noStore(500, 'Server Error')
-  }
-  const cfg = buckets.get(row.bucket_id)
-  const key = normalizeKey(row.p)
-  if (!cfg || !key) return noStore(404, 'Not Found')
-
+async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
   const url = buildOriginUrl(cfg, key)
   const client = makeClient(cfg)
   const cacheControl = `public, max-age=${intVar(env, 'CACHE_TTL_SECONDS', 86400, 0, 31536000)}`
@@ -183,16 +162,20 @@ async function handleDeliver(request, env, ctx, id) {
     }
   }
 
-  const cache = caches.default
-  const cacheKey = new Request(
-    `https://cache.local/${encodeURIComponent(row.bucket_id)}/${encodeURIComponent(key)}`,
-    { method: 'GET' },
-  )
-  try {
-    const hit = await cache.match(cacheKey)
-    if (hit) return hit
-  } catch {
-    /* treat as miss */
+  let cache
+  let cacheKey
+  if (cacheIdentity) {
+    cache = caches.default
+    cacheKey = new Request(
+      `https://cache.local/${encodeURIComponent(cacheIdentity)}/${encodeURIComponent(key)}`,
+      { method: 'GET' },
+    )
+    try {
+      const hit = await cache.match(cacheKey)
+      if (hit) return hit
+    } catch {
+      /* treat as miss */
+    }
   }
 
   let resp
@@ -210,8 +193,37 @@ async function handleDeliver(request, env, ctx, id) {
     status: 200,
     headers: sanitizeHeaders(resp.headers, cacheControl),
   })
-  ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
+  if (cache && cacheKey) {
+    ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
+  }
   return response
+}
+
+async function handleDeliver(request, env, ctx, id) {
+  let row
+  try {
+    row = await resolveLink(env, id)
+  } catch {
+    return noStore(503, 'Service Unavailable')
+  }
+  const now = Math.floor(Date.now() / 1000)
+  if (!row) return noStore(404, 'Not Found')
+  if (row.exp !== 0 && row.exp < now) {
+    deleteLinkBestEffort(ctx, env, id) // lazy cleanup; never blocks / never throws into response
+    return noStore(404, 'Not Found')
+  }
+
+  let buckets
+  try {
+    buckets = getBuckets(env)
+  } catch {
+    return noStore(500, 'Server Error')
+  }
+  const cfg = buckets.get(row.bucket_id)
+  const key = normalizeKey(row.p)
+  if (!cfg || !key) return noStore(404, 'Not Found')
+
+  return deliverOriginObject(request, env, ctx, cfg, key, row.bucket_id)
 }
 
 function jsonResponse(obj, status = 200) {
@@ -264,7 +276,6 @@ function getBuckets(env) {
     if (!Array.isArray(parsed) || parsed.length === 0)
       throw new Error('BUCKETS must be a non-empty array')
     const byId = new Map()
-    const idRe = /^[A-Za-z0-9_-]{1,64}$/
     for (const c of parsed) {
       for (const f of [
         'id',
@@ -282,7 +293,7 @@ function getBuckets(env) {
           throw new Error(`bucket field invalid: ${f}`)
         }
       }
-      if (!idRe.test(c.id)) throw new Error('bucket id charset invalid') // id flows into D1/logs/URLs
+      if (!BUCKET_ID_RE.test(c.id)) throw new Error('bucket id charset invalid') // id flows into D1/logs/URLs
       const origin = parseEndpoint(c.endpoint) // throws on invalid scheme/host/port
       if (byId.has(c.id)) throw new Error('duplicate bucket id')
       byId.set(c.id, {
@@ -311,6 +322,41 @@ function normalizeKey(input) {
     if (seg === '' || seg === '.' || seg === '..') return null
   }
   return key
+}
+
+function normalizePrefix(input) {
+  let prefix = input
+  if (typeof prefix !== 'string' || prefix.length === 0) return null
+  prefix = prefix.startsWith('/') ? prefix.slice(1) : prefix
+  if (!prefix.endsWith('/')) prefix += '/'
+  const inner = prefix.slice(0, -1)
+  const normalized = normalizeKey(inner)
+  return normalized ? `${normalized}/` : null
+}
+
+async function handlePublicBucket(request, env, ctx, rawKey) {
+  const key = normalizeKey(rawKey)
+  if (!key) return noStore(404, 'Not Found')
+
+  const bucketId = env.B_BUCKET_ID
+  if (typeof bucketId !== 'string' || !BUCKET_ID_RE.test(bucketId)) {
+    return noStore(500, 'Server Error')
+  }
+
+  const prefix = normalizePrefix(env.B_PREFIX)
+  if (!prefix) return noStore(500, 'Server Error')
+
+  let buckets
+  try {
+    buckets = getBuckets(env)
+  } catch {
+    return noStore(500, 'Server Error')
+  }
+
+  const cfg = buckets.get(bucketId)
+  if (!cfg) return noStore(500, 'Server Error')
+
+  return deliverOriginObject(request, env, ctx, cfg, `${prefix}${key}`)
 }
 
 // ---- id generation ----
@@ -548,6 +594,14 @@ export default {
           'x-robots-tag': 'noindex',
         },
       })
+    }
+
+    const b = path.match(B_ROUTE)
+    if (b) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return noStore(405, 'Method Not Allowed')
+      }
+      return handlePublicBucket(request, env, ctx, b[1])
     }
 
     const m = path.match(ID_ROUTE)

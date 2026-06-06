@@ -21,6 +21,8 @@ export default defineWorkersConfig({
             CACHE_TTL_SECONDS: '86400',
             TOKEN_TTL_SECONDS: '3600',
             TOKEN_ID_LENGTH: '12',
+            B_BUCKET_ID: 'b2test',
+            B_PREFIX: 'image/',
           },
         },
       },

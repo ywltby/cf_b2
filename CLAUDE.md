@@ -12,6 +12,7 @@ This file provides guidance to Claude Code when working with this repository.
 - 普通过期短链：D1 `exp` 为 Unix 秒。
 - 永久短链：`POST /api/sign` 传 `permanent: true`，D1 `exp = 0`。
 - `GET|HEAD /s/<id>` 流式交付，支持 Range、视频、多线程下载。
+- `GET|HEAD /b/<key>` 无状态公开图片反代，不查 D1、不签发、不鉴权。
 - `POST /api/revoke` 撤销短链。
 - `GET /admin` 同源静态签发页面，不嵌入 secret。
 
@@ -44,6 +45,7 @@ This file provides guidance to Claude Code when working with this repository.
 - 自定义域名：`s.514996.xyz`
 - D1：`DB` -> `cdn-links`
 - Cron：每天 `0 3 * * *` 清理过期行
+- 公开图片反代：`B_BUCKET_ID` 指向 `BUCKETS` 中已有桶 id，`B_PREFIX` 当前为 `image/`
 
 Secrets 不写入 `wrangler.toml`：
 
@@ -83,6 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - `POST /api/revoke`：管理员鉴权，删除 D1 行，返回 `{deleted:boolean}`。
 - `GET /admin`：返回静态签发页面。
 - `GET|HEAD /s/<id>`：查 D1，校验过期，按桶配置签名回源并流式返回。
+- `GET|HEAD /b/<key>`：不查 D1，把 key 映射为 `<B_PREFIX><key>`，按 `B_BUCKET_ID` 指定桶签名回源并流式返回。
 - 已知路径用错方法返回 `405`。
 - 其它路径返回 `403`。
 
@@ -95,6 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - Range 请求严格要求上游返回 `206`；上游忽略 Range 返回 `200` 时会 abort 并重试，耗尽后返回 `502`，绝不把整文件返回给 Range 请求。
 - HEAD 请求按 GET 签名回源，拿到元数据后 abort body，返回无 body 响应。
 - 普通 GET 先查 D1、校验 exp，再查 Cache API；内部缓存键按 `bucketId+key` 去重。
+- `/b/` 不使用 D1 或签发状态，配置缺失或非法时 fail-closed；`Content-Type` 不猜测，完全来自上游对象 metadata。
 - 过期普通链接访问时 best-effort 惰性删除；Cron 批量删除 `exp > 0 AND exp < now`；永久链接不会被清理。
 
 ## 测试覆盖
@@ -106,6 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - 路由默认拒绝和方法限制。
 - 签发鉴权、bucket/key 校验、TTL、永久链接、互斥参数。
 - 流式交付、头部脱敏、内部缓存键、特殊字符编码。
+- `/b/` 公开图片反代、Range、HEAD、方法限制和配置/key 越界拒绝。
 - Range、HEAD、上游错误、D1 fail-closed、过期惰性删除。
 - 撤销、Cron 清理、`/admin` 页面。
 

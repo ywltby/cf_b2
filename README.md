@@ -1,8 +1,10 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接。
+通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 无状态公开图片反代路径。
 
 用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
+
+公开图片可通过 `https://cdn.example.com/b/<key>` 访问。`/b/` 不查 D1、不签发、不鉴权，只把 `<key>` 映射到配置桶的固定 prefix 下，例如默认 `image/<key>`，再复用同一套 SigV4 流式回源、Range、HEAD、错误脱敏和响应头白名单逻辑。
 
 > 基于官方样例 [backblaze-b2-samples/cloudflare-b2](https://github.com/backblaze-b2-samples/cloudflare-b2) 重构而来（v2，与 1.x 不兼容）。
 
@@ -18,14 +20,15 @@
 
 ## 路由
 
-| 方法 + 路径         | 行为                                                    |
-| ------------------- | ------------------------------------------------------- |
-| `POST /api/sign`    | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应 |
-| `POST /api/revoke`  | 管理员鉴权 → 删除某 id                                  |
-| `GET /admin`        | 简易同源签发页面（不嵌入 secret）                       |
-| `GET\|HEAD /s/<id>` | 查 D1 → 流式交付（支持 Range/视频/多线程下载）          |
-| 已知路径用错方法    | `405`                                                   |
-| 其它任意路径        | `403`（含直接访问 `/a.png`、`/<bucket>/key`）           |
+| 方法 + 路径          | 行为                                                      |
+| -------------------- | --------------------------------------------------------- |
+| `POST /api/sign`     | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应   |
+| `POST /api/revoke`   | 管理员鉴权 → 删除某 id                                    |
+| `GET /admin`         | 简易同源签发页面（不嵌入 secret）                         |
+| `GET\|HEAD /s/<id>`  | 查 D1 → 流式交付（支持 Range/视频/多线程下载）            |
+| `GET\|HEAD /b/<key>` | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD） |
+| 已知路径用错方法     | `405`                                                     |
+| 其它任意路径         | `403`（含直接访问 `/a.png`、`/<bucket>/key`）             |
 
 ## 配置
 
@@ -57,11 +60,13 @@
 
 ### vars（`wrangler.toml [vars]`）
 
-| 名称                | 默认    | 说明                                   |
-| ------------------- | ------- | -------------------------------------- |
-| `CACHE_TTL_SECONDS` | `86400` | 成功响应的 `Cache-Control: max-age`    |
-| `TOKEN_TTL_SECONDS` | `3600`  | 短链默认有效期（秒），可被签发请求覆盖 |
-| `TOKEN_ID_LENGTH`   | `16`    | 短 id 字符数（12–64）                  |
+| 名称                | 默认     | 说明                                                                   |
+| ------------------- | -------- | ---------------------------------------------------------------------- |
+| `CACHE_TTL_SECONDS` | `86400`  | 成功响应的 `Cache-Control: max-age`                                    |
+| `TOKEN_TTL_SECONDS` | `3600`   | 短链默认有效期（秒），可被签发请求覆盖                                 |
+| `TOKEN_ID_LENGTH`   | `16`     | 短 id 字符数（12–64）                                                  |
+| `B_BUCKET_ID`       | 无       | `/b/` 使用的固定桶 id，必须匹配 `BUCKETS` 中已有桶；缺失时 fail-closed |
+| `B_PREFIX`          | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`        |
 
 ### D1
 
@@ -138,6 +143,24 @@ curl -X POST https://cdn.example.com/api/revoke \
 ```
 
 `<video>`/下载器的 Range 请求会原样转发并返回 `206`；HEAD 只返回元数据、不下载全量。
+
+### 公开图片反代 `/b/`
+
+外部服务可自行生成确定性 key，并把图片上传到配置桶的固定 prefix 下：
+
+```text
+B2 object key: image/<our_id>
+public URL:    https://cdn.example.com/b/<our_id>
+```
+
+`/b/<key>` 行为：
+
+- 只允许 `GET` / `HEAD`；其它方法返回 `405`。
+- 不查 D1、不调用签发 API、不需要管理员鉴权。
+- `<key>` 允许没有扩展名；Worker 不根据扩展名猜测或设置 `Content-Type`。
+- `Content-Type` 完全来自对象上传时写入的 B2/S3 metadata；Worker 只透传白名单中的 `content-type`。
+- `<key>` 使用同一套对象 key 安全规则：拒绝空段、`.`、`..`、控制字符和反斜杠；`%2e%2e` 这类编码内容按字面字符处理，不作为目录穿越。
+- 实际回源 key 永远是 `<B_PREFIX><key>`；非法 prefix 或桶配置会 fail-closed，不会回退到其它桶或真实路径。
 
 ## 测试
 
