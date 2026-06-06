@@ -28,6 +28,3 @@ crons = ["0 3 * * *"]
 [observability.logs]
 enabled = true
 invocation_logs = true
-
-[observability.traces]
-enabled = true
