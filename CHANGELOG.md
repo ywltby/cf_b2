@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /api/revoke`：撤销短链（删除 D1 行，立即失效）。
 - `/admin`：同源静态签发页面，可填写管理员密码、桶 id、对象 key、TTL 或勾选永久链接；页面不嵌入 secret 或后端标识。
 - `GET|HEAD /b/<key>`：新增无状态公开图片反代路径，不查 D1、不签发、不鉴权；固定映射到 `B_BUCKET_ID` 的 `B_PREFIX + key`，复用 SigV4 流式回源、Range、HEAD、边缘缓存和错误脱敏逻辑，`Content-Type` 仅透传对象 metadata。
+- `GET|HEAD /chapter-content/<key>`：新增章节正文 Parquet 免费读取路径，使用独立 `CHAPTER_CONTENT_BUCKET_ID` 凭证签名同名对象 key，复用流式回源、Range、HEAD、边缘缓存和错误脱敏逻辑。
 - 多桶 / 多服务商：secret `BUCKETS` 为桶配置组数组 `{id,name,endpoint,region,keyId,applicationKey}`，按**稳定 id**（非数组下标）引用；endpoint 用 `new URL` 解析，支持 scheme 与任意端口（B2 / R2 / AWS S3 / MinIO，http 仅可信网络）。
 - 流式交付：全程 `new Response(upstream.body)` 不缓冲；Range → 206（透传 content-range/accept-ranges）、保留大文件重试、HEAD 不下载全量；适配视频 / 音频 / 多线程下载。
 - 过期清理双保险：交付层命中即惰性删除 + 每日 Cron 批量清扫。
@@ -26,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Changed
 
-- 配置模型：secret `BUCKETS` / `ADMIN_PASSWORD`；vars `CACHE_TTL_SECONDS` / `TOKEN_TTL_SECONDS` / `TOKEN_ID_LENGTH` / `B_BUCKET_ID` / `B_PREFIX`；D1 绑定 `DB`。
+- 配置模型：secret `BUCKETS` / `ADMIN_PASSWORD`；vars `CACHE_TTL_SECONDS` / `TOKEN_TTL_SECONDS` / `TOKEN_ID_LENGTH` / `B_BUCKET_ID` / `B_PREFIX` / `CHAPTER_CONTENT_BUCKET_ID`；D1 绑定 `DB`。
 - fail-closed：D1 异常 → 503、上游错误泛化（404→404，其余→502）且不透传 B2 错误体；响应头白名单透传，绝不泄露 endpoint/bucket/key/`x-amz-*`。
 
 #### Removed

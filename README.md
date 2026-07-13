@@ -1,10 +1,12 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 无状态公开图片反代路径。
+通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 公开图片和 `/chapter-content/<key>` 章节正文反代路径。
 
 用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
 
 公开图片可通过 `https://cdn.example.com/b/<key>` 访问。`/b/` 不查 D1、不签发、不鉴权，只把 `<key>` 映射到配置桶的固定 prefix 下，例如默认 `image/<key>`，再复用同一套 SigV4 流式回源、Range、HEAD、错误脱敏和响应头白名单逻辑。
+
+章节正文可通过与 B2 对象 key 相同的 `https://cdn.example.com/chapter-content/...` 访问。该路径同样不查 D1、不鉴权，只允许 `chapter-content/` 前缀，并使用 `CHAPTER_CONTENT_BUCKET_ID` 指定的只读凭证签名回源。
 
 > 基于官方样例 [backblaze-b2-samples/cloudflare-b2](https://github.com/backblaze-b2-samples/cloudflare-b2) 重构而来（v2，与 1.x 不兼容）。
 
@@ -20,15 +22,16 @@
 
 ## 路由
 
-| 方法 + 路径          | 行为                                                      |
-| -------------------- | --------------------------------------------------------- |
-| `POST /api/sign`     | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应   |
-| `POST /api/revoke`   | 管理员鉴权 → 删除某 id                                    |
-| `GET /admin`         | 简易同源签发页面（不嵌入 secret）                         |
-| `GET\|HEAD /s/<id>`  | 查 D1 → 流式交付（支持 Range/视频/多线程下载）            |
-| `GET\|HEAD /b/<key>` | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD） |
-| 已知路径用错方法     | `405`                                                     |
-| 其它任意路径         | `403`（含直接访问 `/a.png`、`/<bucket>/key`）             |
+| 方法 + 路径                        | 行为                                                                 |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `POST /api/sign`                   | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应              |
+| `POST /api/revoke`                 | 管理员鉴权 → 删除某 id                                               |
+| `GET /admin`                       | 简易同源签发页面（不嵌入 secret）                                    |
+| `GET\|HEAD /s/<id>`                | 查 D1 → 流式交付（支持 Range/视频/多线程下载）                       |
+| `GET\|HEAD /b/<key>`               | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD）            |
+| `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代 → 同名 `chapter-content/<key>`（支持 Range/HEAD） |
+| 已知路径用错方法                   | `405`                                                                |
+| 其它任意路径                       | `403`（含直接访问 `/a.png`、`/<bucket>/key`）                        |
 
 ## 配置
 
@@ -60,13 +63,14 @@
 
 ### vars（`wrangler.toml [vars]`）
 
-| 名称                | 默认     | 说明                                                                   |
-| ------------------- | -------- | ---------------------------------------------------------------------- |
-| `CACHE_TTL_SECONDS` | `86400`  | 成功响应的 `Cache-Control: max-age`                                    |
-| `TOKEN_TTL_SECONDS` | `3600`   | 短链默认有效期（秒），可被签发请求覆盖                                 |
-| `TOKEN_ID_LENGTH`   | `16`     | 短 id 字符数（12–64）                                                  |
-| `B_BUCKET_ID`       | 无       | `/b/` 使用的固定桶 id，必须匹配 `BUCKETS` 中已有桶；缺失时 fail-closed |
-| `B_PREFIX`          | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`        |
+| 名称                        | 默认     | 说明                                                                                      |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `CACHE_TTL_SECONDS`         | `86400`  | 成功响应的 `Cache-Control: max-age`                                                       |
+| `TOKEN_TTL_SECONDS`         | `3600`   | 短链默认有效期（秒），可被签发请求覆盖                                                    |
+| `TOKEN_ID_LENGTH`           | `16`     | 短 id 字符数（12–64）                                                                     |
+| `B_BUCKET_ID`               | 无       | `/b/` 使用的固定桶 id，必须匹配 `BUCKETS` 中已有桶；缺失时 fail-closed                    |
+| `B_PREFIX`                  | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`                           |
+| `CHAPTER_CONTENT_BUCKET_ID` | 无       | `/chapter-content/` 使用的固定桶 id，建议绑定仅可读取该前缀的独立凭证；缺失时 fail-closed |
 
 ### D1
 
@@ -162,6 +166,12 @@ public URL:    https://cdn.example.com/b/<our_id>
 - 普通 GET 成功响应会写入 Cloudflare 边缘缓存；Range 和 HEAD 仍绕过缓存。
 - `<key>` 使用同一套对象 key 安全规则：拒绝空段、`.`、`..`、控制字符和反斜杠；`%2e%2e` 这类编码内容按字面字符处理，不作为目录穿越。
 - 实际回源 key 永远是 `<B_PREFIX><key>`；非法 prefix 或桶配置会 fail-closed，不会回退到其它桶或真实路径。
+
+### 章节正文反代 `/chapter-content/`
+
+`GET|HEAD /chapter-content/<key>` 将完整 URL 路径作为同名 B2 对象 key 签名回源。该路径不查 D1、不接受任意前缀，也不会回退到 `/b/` 的图片凭证。生产环境应让 `CHAPTER_CONTENT_BUCKET_ID` 指向 `BUCKETS` 中仅允许读取 `chapter-content/` 的独立 application key。
+
+普通 GET 成功响应写入 Cloudflare 边缘缓存，Range 和 HEAD 绕过缓存。腾讯云 EO 可把 `s.514996.xyz` 设为源站并保持路径不变；客户端访问 `https://s.o7n.cn/chapter-content/...` 时仍由本 Worker 生成 B2 签名。
 
 ## 测试
 

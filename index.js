@@ -2,6 +2,7 @@ import { AwsClient } from 'aws4fetch'
 
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const B_ROUTE = /^\/b\/(.+)$/
+const CHAPTER_CONTENT_ROUTE = /^\/chapter-content\/(.+)$/
 const SIGN_PATH = '/api/sign'
 const REVOKE_PATH = '/api/revoke'
 const BUCKET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -334,16 +335,22 @@ function normalizePrefix(input) {
   return normalized ? `${normalized}/` : null
 }
 
-async function handlePublicBucket(request, env, ctx, rawKey) {
+async function handlePublicBucket(
+  request,
+  env,
+  ctx,
+  rawKey,
+  bucketId,
+  rawPrefix,
+) {
   const key = normalizeKey(rawKey)
   if (!key) return noStore(404, 'Not Found')
 
-  const bucketId = env.B_BUCKET_ID
   if (typeof bucketId !== 'string' || !BUCKET_ID_RE.test(bucketId)) {
     return noStore(500, 'Server Error')
   }
 
-  const prefix = normalizePrefix(env.B_PREFIX)
+  const prefix = normalizePrefix(rawPrefix)
   if (!prefix) return noStore(500, 'Server Error')
 
   let buckets
@@ -608,7 +615,29 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return noStore(405, 'Method Not Allowed')
       }
-      return handlePublicBucket(request, env, ctx, b[1])
+      return handlePublicBucket(
+        request,
+        env,
+        ctx,
+        b[1],
+        env.B_BUCKET_ID,
+        env.B_PREFIX,
+      )
+    }
+
+    const chapterContent = path.match(CHAPTER_CONTENT_ROUTE)
+    if (chapterContent) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return noStore(405, 'Method Not Allowed')
+      }
+      return handlePublicBucket(
+        request,
+        env,
+        ctx,
+        chapterContent[1],
+        env.CHAPTER_CONTENT_BUCKET_ID,
+        'chapter-content/',
+      )
     }
 
     const m = path.match(ID_ROUTE)
