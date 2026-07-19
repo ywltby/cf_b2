@@ -14,6 +14,7 @@ This file provides guidance to Claude Code when working with this repository.
 - `GET|HEAD /s/<id>` 流式交付，支持 Range、视频、多线程下载。
 - `GET|HEAD /b/<key>` 无状态公开图片反代，不查 D1、不签发、不鉴权。
 - `GET|HEAD /chapter-content/<key>` 无状态章节正文反代，使用独立只读桶凭证，不查 D1、不鉴权。
+- `GET|HEAD /book-export/<key>` 无状态整书交付反代，使用仅可读取 `book-export/` 的独立凭证，不查 D1、不鉴权。
 - `POST /api/revoke` 撤销短链。
 - `GET /admin` 同源静态签发页面，不嵌入 secret。
 
@@ -48,6 +49,7 @@ This file provides guidance to Claude Code when working with this repository.
 - Cron：每天 `0 3 * * *` 清理过期行
 - 公开图片反代：`B_BUCKET_ID` 指向 `BUCKETS` 中已有桶 id，`B_PREFIX` 当前为 `image/`
 - 章节正文反代：`CHAPTER_CONTENT_BUCKET_ID` 指向 `BUCKETS` 中仅允许读取 `chapter-content/` 的桶配置
+- 整书交付反代：`BOOK_EXPORT_BUCKET_ID` 复用 `BUCKETS` 中的桶连接信息，`BOOK_EXPORT_KEY_ID` 与 `BOOK_EXPORT_APPLICATION_KEY` 提供仅限 `book-export/` 的独立只读凭证
 
 Secrets 不写入 `wrangler.toml`：
 
@@ -89,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - `GET|HEAD /s/<id>`：查 D1，校验过期，按桶配置签名回源并流式返回。
 - `GET|HEAD /b/<key>`：不查 D1，把 key 映射为 `<B_PREFIX><key>`，按 `B_BUCKET_ID` 指定桶签名回源并流式返回。
 - `GET|HEAD /chapter-content/<key>`：不查 D1，按 `CHAPTER_CONTENT_BUCKET_ID` 使用完整同名对象 key 签名回源并流式返回。
+- `GET|HEAD /book-export/<key>`：不查 D1，固定读取同名 `book-export/` 对象 key，并使用独立只读凭证签名回源。
 - 已知路径用错方法返回 `405`。
 - 其它路径返回 `403`。
 
@@ -103,6 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - 普通 GET 先查 D1、校验 exp，再查 Cache API；内部缓存键按 `bucketId+key` 去重。
 - `/b/` 不使用 D1 或签发状态，配置缺失或非法时 fail-closed；普通 GET 成功响应写入边缘缓存，Range/HEAD 绕过缓存；`Content-Type` 不猜测，完全来自上游对象 metadata。
 - `/chapter-content/` 只允许固定前缀，使用独立桶配置且不回退到图片凭证；普通 GET 缓存、Range/HEAD 绕过缓存。
+- `/book-export/` 只允许固定前缀，使用独立只读凭证且不回退到章节正文或图片凭证；普通 GET 缓存、Range/HEAD 绕过缓存。
 - 过期普通链接访问时 best-effort 惰性删除；Cron 批量删除 `exp > 0 AND exp < now`；永久链接不会被清理。
 
 ## 测试覆盖
@@ -116,6 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - 流式交付、头部脱敏、内部缓存键、特殊字符编码。
 - `/b/` 公开图片反代、Range、HEAD、方法限制和配置/key 越界拒绝。
 - `/chapter-content/` 同名对象 key 反代、方法限制和独立配置 fail-closed。
+- `/book-export/` 同名对象 key 反代、方法限制和独立凭证 fail-closed。
 - Range、HEAD、上游错误、D1 fail-closed、过期惰性删除。
 - 撤销、Cron 清理、`/admin` 页面。
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 新增 `/book-export/<key>` 无状态整书交付反代，使用固定前缀和独立只读凭证，支持 GET、HEAD、Range 与边缘缓存。
+
 ### 重大重构 (Breaking) — D1 短链 CDN 网关 (2.0.0)
 
 完全重写：从「透明 B2 S3 代理（对外暴露 bucket/对象路径）」改为「D1 短链网关」。**与 1.x 完全不兼容**——配置、路由、行为全部变化。

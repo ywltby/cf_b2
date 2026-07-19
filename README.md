@@ -1,6 +1,6 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 公开图片和 `/chapter-content/<key>` 章节正文反代路径。
+通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 公开图片、`/chapter-content/<key>` 章节正文和 `/book-export/<key>` 整书交付反代路径。
 
 用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
 
@@ -30,6 +30,7 @@
 | `GET\|HEAD /s/<id>`                | 查 D1 → 流式交付（支持 Range/视频/多线程下载）                       |
 | `GET\|HEAD /b/<key>`               | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD）            |
 | `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代 → 同名 `chapter-content/<key>`（支持 Range/HEAD） |
+| `GET\|HEAD /book-export/<key>`     | 无状态整书交付反代 → 同名 `book-export/<key>`（支持 Range/HEAD）     |
 | 已知路径用错方法                   | `405`                                                                |
 | 其它任意路径                       | `403`（含直接访问 `/a.png`、`/<bucket>/key`）                        |
 
@@ -71,6 +72,9 @@
 | `B_BUCKET_ID`               | 无       | `/b/` 使用的固定桶 id，必须匹配 `BUCKETS` 中已有桶；缺失时 fail-closed                    |
 | `B_PREFIX`                  | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`                           |
 | `CHAPTER_CONTENT_BUCKET_ID` | 无       | `/chapter-content/` 使用的固定桶 id，建议绑定仅可读取该前缀的独立凭证；缺失时 fail-closed |
+| `BOOK_EXPORT_BUCKET_ID`     | 无       | `/book-export/` 复用的固定桶 id；缺失时 fail-closed                                       |
+
+`BOOK_EXPORT_KEY_ID` 和 `BOOK_EXPORT_APPLICATION_KEY` 必须通过 Worker secret 提供，并绑定仅可读取 `book-export/` 的独立 application key。该路由不会回退到 `BUCKETS` 内的章节正文或图片凭证。
 
 ### D1
 
@@ -172,6 +176,12 @@ public URL:    https://cdn.example.com/b/<our_id>
 `GET|HEAD /chapter-content/<key>` 将完整 URL 路径作为同名 B2 对象 key 签名回源。该路径不查 D1、不接受任意前缀，也不会回退到 `/b/` 的图片凭证。生产环境应让 `CHAPTER_CONTENT_BUCKET_ID` 指向 `BUCKETS` 中仅允许读取 `chapter-content/` 的独立 application key。
 
 普通 GET 成功响应写入 Cloudflare 边缘缓存，Range 和 HEAD 绕过缓存。腾讯云 EO 可把 `s.514996.xyz` 设为源站并保持路径不变；客户端访问 `https://s.o7n.cn/chapter-content/...` 时仍由本 Worker 生成 B2 签名。
+
+### 整书交付反代 `/book-export/`
+
+`GET|HEAD /book-export/<key>` 将完整 URL 路径作为同名 B2 对象 key 签名回源。路由只接受 `book-export/` 固定前缀，并通过 `BOOK_EXPORT_KEY_ID`、`BOOK_EXPORT_APPLICATION_KEY` 使用独立只读凭证；配置缺失时 fail-closed。
+
+普通 GET 成功响应写入 Cloudflare 边缘缓存，Range 和 HEAD 绕过缓存。腾讯云 EO 保持路径不变时，`https://s.o7n.cn/book-export/...` 与 `https://s.514996.xyz/book-export/...` 读取同一对象。
 
 ## 测试
 

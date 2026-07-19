@@ -12,10 +12,12 @@ TOKEN_ID_LENGTH = "16"
 B_BUCKET_ID = "1145141919810"
 B_PREFIX = "image/"
 CHAPTER_CONTENT_BUCKET_ID = "chapter-content"
+BOOK_EXPORT_BUCKET_ID = "chapter-content"
 
 # Secrets (set via `wrangler secret put`, do NOT put values here):
 #   BUCKETS         JSON array: [{"id","name","endpoint","region","keyId","applicationKey"}]
 #   ADMIN_PASSWORD  admin API password
+#   BOOK_EXPORT_KEY_ID / BOOK_EXPORT_APPLICATION_KEY  book-export/ only read credentials
 
 [[d1_databases]]
 binding = "DB"

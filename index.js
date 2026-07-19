@@ -3,6 +3,7 @@ import { AwsClient } from 'aws4fetch'
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const B_ROUTE = /^\/b\/(.+)$/
 const CHAPTER_CONTENT_ROUTE = /^\/chapter-content\/(.+)$/
+const BOOK_EXPORT_ROUTE = /^\/book-export\/(.+)$/
 const SIGN_PATH = '/api/sign'
 const REVOKE_PATH = '/api/revoke'
 const BUCKET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -342,6 +343,7 @@ async function handlePublicBucket(
   rawKey,
   bucketId,
   rawPrefix,
+  credentials,
 ) {
   const key = normalizeKey(rawKey)
   if (!key) return noStore(404, 'Not Found')
@@ -360,8 +362,23 @@ async function handlePublicBucket(
     return noStore(500, 'Server Error')
   }
 
-  const cfg = buckets.get(bucketId)
+  let cfg = buckets.get(bucketId)
   if (!cfg) return noStore(500, 'Server Error')
+  if (credentials !== undefined) {
+    if (
+      typeof credentials.keyId !== 'string' ||
+      credentials.keyId.length === 0 ||
+      typeof credentials.applicationKey !== 'string' ||
+      credentials.applicationKey.length === 0
+    ) {
+      return noStore(500, 'Server Error')
+    }
+    cfg = {
+      ...cfg,
+      keyId: credentials.keyId,
+      applicationKey: credentials.applicationKey,
+    }
+  }
 
   return deliverOriginObject(
     request,
@@ -637,6 +654,25 @@ export default {
         chapterContent[1],
         env.CHAPTER_CONTENT_BUCKET_ID,
         'chapter-content/',
+      )
+    }
+
+    const bookExport = path.match(BOOK_EXPORT_ROUTE)
+    if (bookExport) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return noStore(405, 'Method Not Allowed')
+      }
+      return handlePublicBucket(
+        request,
+        env,
+        ctx,
+        bookExport[1],
+        env.BOOK_EXPORT_BUCKET_ID,
+        'book-export/',
+        {
+          keyId: env.BOOK_EXPORT_KEY_ID,
+          applicationKey: env.BOOK_EXPORT_APPLICATION_KEY,
+        },
       )
     }
 
