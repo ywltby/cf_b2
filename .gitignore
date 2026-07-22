@@ -16,3 +16,4 @@ wrangler.toml
 # Local-only secret material / scratch files (never commit)
 buckets.json
 _*
+.ace-tool/
