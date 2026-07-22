@@ -16,6 +16,18 @@ beforeAll(() => {
 
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
+test('serves a fixed 100 MiB download speed test at the root path', async () => {
+  const response = await snippet.fetch(new Request('https://b.wgoyai.kdns.fr/'))
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
+
+  const html = await response.text()
+  expect(html).toContain('https://b.wgoyai.kdns.fr/BLM-008.mp4')
+  expect(html).toContain('104857600')
+  expect(html).toContain('Range')
+})
+
 test('maps nested URL paths directly to the same B2 object key', async () => {
   expect(snippet.fetch).toBeTypeOf('function')
 
@@ -68,6 +80,25 @@ test('caches successful full GET responses by object key', async () => {
 
   expect(await first.text()).toBe('CACHED DATA')
   expect(await second.text()).toBe('CACHED DATA')
+})
+
+test('caches full GET responses without a Worker execution context', async () => {
+  fetchMock
+    .get(B2_ORIGIN)
+    .intercept({
+      path: '/replace-with-bucket/folder/snippet-cache',
+      method: 'GET',
+    })
+    .reply(200, 'SNIPPET CACHE', {
+      headers: { 'content-type': 'application/octet-stream' },
+    })
+
+  const response = await snippet.fetch(
+    new Request('https://files.example.com/folder/snippet-cache'),
+  )
+
+  expect(response.status).toBe(200)
+  expect(await response.text()).toBe('SNIPPET CACHE')
 })
 
 test('produces the same B2 SigV4 authorization as aws4fetch', async () => {
