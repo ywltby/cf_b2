@@ -131,7 +131,7 @@ const SPEED_TEST_HTML = `<!doctype html>
     <p id="status" role="status">准备就绪</p>
   </main>
   <script>
-    const TEST_URL = 'https://b.wgoyai.kdns.fr/BLM-008.mp4'
+    const TEST_URL = '/BLM-008.mp4'
     const TOTAL_BYTES = 104857600
     const STREAMS = 4
     const RANGE_BYTES = TOTAL_BYTES / STREAMS
@@ -233,7 +233,7 @@ function speedTestPage(method) {
     headers: {
       'cache-control': 'no-store',
       'content-security-policy':
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://b.wgoyai.kdns.fr; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
       'content-type': 'text/html; charset=utf-8',
       'referrer-policy': 'no-referrer',
       'x-content-type-options': 'nosniff',

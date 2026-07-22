@@ -17,15 +17,19 @@ beforeAll(() => {
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
 test('serves a fixed 100 MiB download speed test at the root path', async () => {
-  const response = await snippet.fetch(new Request('https://b.wgoyai.kdns.fr/'))
+  const response = await snippet.fetch(new Request('https://b.o7n.cn/'))
 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
 
   const html = await response.text()
-  expect(html).toContain('https://b.wgoyai.kdns.fr/BLM-008.mp4')
+  expect(html).toContain("const TEST_URL = '/BLM-008.mp4'")
+  expect(html).not.toContain('b.wgoyai.kdns.fr')
   expect(html).toContain('104857600')
   expect(html).toContain('Range')
+  expect(response.headers.get('content-security-policy')).toContain(
+    "connect-src 'self'",
+  )
 })
 
 test('maps nested URL paths directly to the same B2 object key', async () => {
