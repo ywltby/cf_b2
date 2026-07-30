@@ -15,7 +15,7 @@
 - **短链不可枚举**：`id` 为 `crypto.getRandomValues` 生成的 base64url 随机串，默认 16 字符（≈96bit），下限 12。
 - **fail-closed**：D1 出错、配置非法、上游异常一律拒绝，绝不回退到直连真实路径。
 - **不泄露后端**：错误响应不带 body、不透传 B2/XML 错误体与 `x-amz-*` 等头；成功响应仅白名单透传 `content-type/content-length/content-range/accept-ranges/etag/last-modified`。
-- **下载文件名**：`/s/<id>` 按对象 key 末段生成 `Content-Disposition: attachment`；中文名通过 `filename*` 返回，旧客户端使用安全 ASCII 备用名。
+- **下载文件名**：`/s/<id>?filename=<名称>` 可用安全的展示名称生成 `Content-Disposition: attachment`；缺失或非法时回退到对象 key 末段。中文名通过 `filename*` 返回，旧客户端使用安全 ASCII 备用名。
 - **稳定桶 id**：D1 存 `bucket_id`（稳定字符串，非数组下标），重排/增减桶不会让旧短链指向错桶。
 - **对象 key 安全编码**：按段 RFC3986 编码，拒绝 `..`/`.`/空段/控制字符；`?`/`#`/空格/`%2e%2e` 均作字面字符处理。
 - **永久链接显式标记**：D1 中 `exp = 0` 表示永不过期；普通链接使用 Unix 秒级过期时间。
@@ -28,7 +28,7 @@
 | `POST /api/sign`                   | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应              |
 | `POST /api/revoke`                 | 管理员鉴权 → 删除某 id                                               |
 | `GET /admin`                       | 简易同源签发页面（不嵌入 secret）                                    |
-| `GET\|HEAD /s/<id>`                | 查 D1 → 带文件名的附件流式交付（支持 Range/多线程下载）              |
+| `GET\|HEAD /s/<id>[?filename=...]` | 查 D1 → 带安全展示文件名的附件流式交付（支持 Range/多线程下载）      |
 | `GET\|HEAD /b/<key>`               | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD）            |
 | `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代 → 同名 `chapter-content/<key>`（支持 Range/HEAD） |
 | `GET\|HEAD /book-export/<key>`     | 无状态整书交付反代 → 同名 `book-export/<key>`（支持 Range/HEAD）     |

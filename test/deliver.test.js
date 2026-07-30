@@ -85,6 +85,50 @@ describe('GET /s/<id> happy path', () => {
     )
   })
 
+  test('uses filename query as safe attachment name', async () => {
+    await insertLink('filename00002', 'b2test', 'exports/book.txt', FUTURE)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({ path: '/test-bucket/exports/book.txt', method: 'GET' })
+      .reply(200, 'TEXT', {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+
+    const res = await SELF.fetch(
+      'https://cdn.example.com/s/filename00002?filename=%E6%B5%8B%E8%AF%95%E4%B9%A6.txt',
+    )
+
+    expect(res.headers.get('content-disposition')).toBe(
+      `attachment; filename="download.txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E4%B9%A6.txt`,
+    )
+  })
+
+  test('ignores unsafe filename query', async () => {
+    await insertLink(
+      'filename00003',
+      'b2test',
+      'exports/unsafe-book.txt',
+      FUTURE,
+    )
+    fetchMock
+      .get(ORIGIN)
+      .intercept({
+        path: '/test-bucket/exports/unsafe-book.txt',
+        method: 'GET',
+      })
+      .reply(200, 'TEXT', {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+
+    const res = await SELF.fetch(
+      'https://cdn.example.com/s/filename00003?filename=bad%2Fname.txt',
+    )
+
+    expect(res.headers.get('content-disposition')).toBe(
+      `attachment; filename="unsafe-book.txt"; filename*=UTF-8''unsafe-book.txt`,
+    )
+  })
+
   test('keys with special chars are RFC3986-encoded into the origin URL', async () => {
     await insertLink('id0000000004', 'b2test', 'a dir/b?c#d.png', FUTURE)
     // 若 aws4fetch 对 S3 路径双重编码，这里的 path 不匹配 -> fetchMock 抛错 -> 测试失败（正是我们要的暴露）

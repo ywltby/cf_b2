@@ -96,6 +96,19 @@ function downloadDisposition(filename) {
   return `attachment; filename="${fallback.slice(0, 120)}${extension}"; filename*=UTF-8''${encoded}`
 }
 
+export function requestedDownloadFilename(request) {
+  const filename = new URL(request.url).searchParams.get('filename')
+  if (
+    !filename ||
+    filename !== filename.trim() ||
+    new TextEncoder().encode(filename).length > 255 ||
+    /[\u0000-\u001f\u007f/\\]/.test(filename)
+  ) {
+    return ''
+  }
+  return filename
+}
+
 function asDownload(response, filename) {
   if (!filename) return response
   const headers = new Headers(response.headers)
@@ -298,7 +311,7 @@ async function handleDeliver(request, env, ctx, id) {
     cfg,
     key,
     row.bucket_id,
-    key.slice(key.lastIndexOf('/') + 1),
+    requestedDownloadFilename(request) || key.slice(key.lastIndexOf('/') + 1),
   )
 }
 
