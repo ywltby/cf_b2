@@ -5,7 +5,15 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test'
 import worker from '../index.js'
-import { expect, test, beforeAll, afterEach, describe } from 'vitest'
+import {
+  expect,
+  test,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  describe,
+} from 'vitest'
+import { resetDb, insertLink, FUTURE } from './helpers.js'
 
 const ORIGIN = 'https://s3.us-west-004.backblazeb2.com'
 const BOOK_EXPORT_ENV = {
@@ -19,6 +27,7 @@ beforeAll(() => {
   fetchMock.activate()
   fetchMock.disableNetConnect()
 })
+beforeEach(resetDb)
 afterEach(() => fetchMock.assertNoPendingInterceptors())
 
 async function fetchBookExport(path, init = {}, testEnv = BOOK_EXPORT_ENV) {
@@ -73,5 +82,25 @@ describe('GET|HEAD /book-export/<key>', () => {
     )
 
     expect(res.status).toBe(500)
+  })
+
+  test('short links use the dedicated book-export credentials', async () => {
+    const key = 'book-export/v1/channel=fanqie/book.txt.7z'
+    await insertLink('bookexport01', 'b2test', key, FUTURE)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({
+        path: `/test-bucket/${key.replaceAll('=', '%3D')}`,
+        method: 'GET',
+        headers: {
+          authorization: /Credential=book-export-key-id\//,
+        },
+      })
+      .reply(200, '7Z')
+
+    const res = await fetchBookExport('/s/bookexport01')
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('7Z')
   })
 })

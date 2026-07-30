@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - 新增 `/book-export/<key>` 无状态整书交付反代，使用固定前缀和独立只读凭证，支持 GET、HEAD、Range 与边缘缓存。
+- 修复 `book-export/` 对象经 `/s/<id>` 短链交付时未使用整书专用只读凭证的问题。
 
 ### 重大重构 (Breaking) — D1 短链 CDN 网关 (2.0.0)
 

@@ -221,9 +221,27 @@ async function handleDeliver(request, env, ctx, id) {
   } catch {
     return noStore(500, 'Server Error')
   }
-  const cfg = buckets.get(row.bucket_id)
+  let cfg = buckets.get(row.bucket_id)
   const key = normalizeKey(row.p)
   if (!cfg || !key) return noStore(404, 'Not Found')
+  if (
+    row.bucket_id === env.BOOK_EXPORT_BUCKET_ID &&
+    key.startsWith('book-export/')
+  ) {
+    if (
+      typeof env.BOOK_EXPORT_KEY_ID !== 'string' ||
+      env.BOOK_EXPORT_KEY_ID.length === 0 ||
+      typeof env.BOOK_EXPORT_APPLICATION_KEY !== 'string' ||
+      env.BOOK_EXPORT_APPLICATION_KEY.length === 0
+    ) {
+      return noStore(500, 'Server Error')
+    }
+    cfg = {
+      ...cfg,
+      keyId: env.BOOK_EXPORT_KEY_ID,
+      applicationKey: env.BOOK_EXPORT_APPLICATION_KEY,
+    }
+  }
 
   return deliverOriginObject(request, env, ctx, cfg, key, row.bucket_id)
 }
