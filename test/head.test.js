@@ -29,6 +29,9 @@ test('HEAD returns metadata headers and empty body', async () => {
   expect(res.status).toBe(200)
   expect(res.headers.get('content-length')).toBe('12345')
   expect(res.headers.get('accept-ranges')).toBe('bytes')
+  expect(res.headers.get('content-disposition')).toBe(
+    `attachment; filename="clip.mp4"; filename*=UTF-8''clip.mp4`,
+  )
   expect(await res.text()).toBe('')
 })
 
@@ -46,5 +49,8 @@ test('HEAD + Range returns empty body 206', async () => {
   })
   expect(res.status).toBe(206)
   expect(res.headers.get('content-range')).toBe('bytes 0-3/100')
+  expect(res.headers.get('content-disposition')).toBe(
+    `attachment; filename="clip.mp4"; filename*=UTF-8''clip.mp4`,
+  )
   expect(await res.text()).toBe('')
 })

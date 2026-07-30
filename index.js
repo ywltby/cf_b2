@@ -76,6 +76,37 @@ function sanitizeHeaders(upstream, cacheControl) {
   h.set('cache-control', cacheControl)
   return h
 }
+
+function downloadDisposition(filename) {
+  const dot = filename.lastIndexOf('.')
+  const extension =
+    dot > 0 && /^\.[A-Za-z0-9.]{1,20}$/.test(filename.slice(dot))
+      ? filename.slice(dot)
+      : ''
+  const stem = extension ? filename.slice(0, -extension.length) : filename
+  const asciiStem = stem
+    .replace(/[^\x20-\x7e]/g, '')
+    .replace(/["\\;]/g, '_')
+    .trim()
+  const fallback = /[A-Za-z0-9]/.test(asciiStem) ? asciiStem : 'download'
+  const encoded = encodeURIComponent(filename).replace(
+    /[!'()*]/g,
+    (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase(),
+  )
+  return `attachment; filename="${fallback.slice(0, 120)}${extension}"; filename*=UTF-8''${encoded}`
+}
+
+function asDownload(response, filename) {
+  if (!filename) return response
+  const headers = new Headers(response.headers)
+  headers.set('content-disposition', downloadDisposition(filename))
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 function mapUpstreamError(status) {
   if (status === 404) return 404
   if (status === 416) return 416
@@ -112,7 +143,15 @@ async function fetchRange(client, url, rangeHeader) {
   return response
 }
 
-async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
+async function deliverOriginObject(
+  request,
+  env,
+  ctx,
+  cfg,
+  key,
+  cacheIdentity,
+  downloadFilename,
+) {
   const url = buildOriginUrl(cfg, key)
   const client = makeClient(cfg)
   const cacheControl = `public, max-age=${intVar(env, 'CACHE_TTL_SECONDS', 86400, 0, 31536000)}`
@@ -139,9 +178,15 @@ async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
     const headers = sanitizeHeaders(resp.headers, cacheControl)
     if (isHead) {
       resp.body?.cancel()
-      return new Response(null, { status: 206, headers })
+      return asDownload(
+        new Response(null, { status: 206, headers }),
+        downloadFilename,
+      )
     }
-    return new Response(resp.body, { status: 206, headers })
+    return asDownload(
+      new Response(resp.body, { status: 206, headers }),
+      downloadFilename,
+    )
   }
 
   // HEAD (no range): sign GET (issue #18), capture headers, abort body (no full download)
@@ -158,7 +203,10 @@ async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
       const status = resp.status
       controller.abort()
       if (!resp.ok) return noStore(mapUpstreamError(status), 'Upstream Error')
-      return new Response(null, { status, headers })
+      return asDownload(
+        new Response(null, { status, headers }),
+        downloadFilename,
+      )
     } catch {
       return noStore(502, 'Bad Gateway')
     }
@@ -174,7 +222,7 @@ async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
     )
     try {
       const hit = await cache.match(cacheKey)
-      if (hit) return hit
+      if (hit) return asDownload(hit, downloadFilename)
     } catch {
       /* treat as miss */
     }
@@ -198,7 +246,7 @@ async function deliverOriginObject(request, env, ctx, cfg, key, cacheIdentity) {
   if (cache && cacheKey) {
     ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}))
   }
-  return response
+  return asDownload(response, downloadFilename)
 }
 
 async function handleDeliver(request, env, ctx, id) {
@@ -243,7 +291,15 @@ async function handleDeliver(request, env, ctx, id) {
     }
   }
 
-  return deliverOriginObject(request, env, ctx, cfg, key, row.bucket_id)
+  return deliverOriginObject(
+    request,
+    env,
+    ctx,
+    cfg,
+    key,
+    row.bucket_id,
+    key.slice(key.lastIndexOf('/') + 1),
+  )
 }
 
 function jsonResponse(obj, status = 200) {

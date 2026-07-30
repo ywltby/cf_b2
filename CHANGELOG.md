@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 修复 `/s/<id>` 未触发附件下载且缺少文件名的问题；GET、HEAD、Range 统一按对象 key 末段返回安全的 `Content-Disposition`，中文名使用 RFC 5987 编码。
 - 新增 `/book-export/<key>` 无状态整书交付反代，使用固定前缀和独立只读凭证，支持 GET、HEAD、Range 与边缘缓存。
 - 修复 `book-export/` 对象经 `/s/<id>` 短链交付时未使用整书专用只读凭证的问题。
 

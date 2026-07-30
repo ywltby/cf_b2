@@ -66,6 +66,25 @@ describe('GET /s/<id> happy path', () => {
     expect(await res.text()).toBe('FOREVER')
   })
 
+  test('forces download with a safe UTF-8 filename', async () => {
+    await insertLink('filename00001', 'b2test', 'exports/书名.txt', FUTURE)
+    fetchMock
+      .get(ORIGIN)
+      .intercept({
+        path: '/test-bucket/exports/%E4%B9%A6%E5%90%8D.txt',
+        method: 'GET',
+      })
+      .reply(200, 'TEXT', {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+
+    const res = await SELF.fetch('https://cdn.example.com/s/filename00001')
+
+    expect(res.headers.get('content-disposition')).toBe(
+      `attachment; filename="download.txt"; filename*=UTF-8''%E4%B9%A6%E5%90%8D.txt`,
+    )
+  })
+
   test('keys with special chars are RFC3986-encoded into the origin URL', async () => {
     await insertLink('id0000000004', 'b2test', 'a dir/b?c#d.png', FUTURE)
     // 若 aws4fetch 对 S3 路径双重编码，这里的 path 不匹配 -> fetchMock 抛错 -> 测试失败（正是我们要的暴露）

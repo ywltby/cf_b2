@@ -38,6 +38,9 @@ describe('Range', () => {
     const r1 = await SELF.fetch('https://cdn.example.com/s/vid000000001', opts)
     expect(r1.status).toBe(206)
     expect(r1.headers.get('content-range')).toBe('bytes 0-5/100')
+    expect(r1.headers.get('content-disposition')).toBe(
+      `attachment; filename="movie.mp4"; filename*=UTF-8''movie.mp4`,
+    )
     expect(await r1.text()).toBe('PARTIA')
     const r2 = await SELF.fetch('https://cdn.example.com/s/vid000000002', opts)
     expect(r2.status).toBe(206)

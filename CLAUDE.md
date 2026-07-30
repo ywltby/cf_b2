@@ -11,7 +11,7 @@ This file provides guidance to Claude Code when working with this repository.
 - 多个私有 S3 兼容桶：Backblaze B2、Cloudflare R2、AWS S3、MinIO 等。
 - 普通过期短链：D1 `exp` 为 Unix 秒。
 - 永久短链：`POST /api/sign` 传 `permanent: true`，D1 `exp = 0`。
-- `GET|HEAD /s/<id>` 流式交付，支持 Range、视频、多线程下载。
+- `GET|HEAD /s/<id>` 以附件方式流式交付，文件名取对象 key 末段，支持 Range 和多线程下载。
 - `GET|HEAD /b/<key>` 无状态公开图片反代，不查 D1、不签发、不鉴权。
 - `GET|HEAD /chapter-content/<key>` 无状态章节正文反代，使用独立只读桶凭证，不查 D1、不鉴权。
 - `GET|HEAD /book-export/<key>` 无状态整书交付反代，使用仅可读取 `book-export/` 的独立凭证，不查 D1、不鉴权。
@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
   - `permanent:true` 和 `expiresIn` 互斥。
 - `POST /api/revoke`：管理员鉴权，删除 D1 行，返回 `{deleted:boolean}`。
 - `GET /admin`：返回静态签发页面。
-- `GET|HEAD /s/<id>`：查 D1，校验过期，按桶配置签名回源并流式返回。
+- `GET|HEAD /s/<id>`：查 D1，校验过期，按桶配置签名回源，并按对象 key 末段设置安全的附件文件名。
 - `GET|HEAD /b/<key>`：不查 D1，把 key 映射为 `<B_PREFIX><key>`，按 `B_BUCKET_ID` 指定桶签名回源并流式返回。
 - `GET|HEAD /chapter-content/<key>`：不查 D1，按 `CHAPTER_CONTENT_BUCKET_ID` 使用完整同名对象 key 签名回源并流式返回。
 - `GET|HEAD /book-export/<key>`：不查 D1，固定读取同名 `book-export/` 对象 key，并使用独立只读凭证签名回源。
@@ -99,7 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 - fail-closed：D1 错误、配置非法、上游异常一律拒绝，不回退到真实路径。
 - 不泄露后端：交付端错误响应无 body，不透传 B2/XML 错误体、`x-amz-*`、endpoint、bucket name 或 key。
-- 成功响应只白名单透传 `content-type`、`content-length`、`content-range`、`accept-ranges`、`etag`、`last-modified`。
+- 成功响应只白名单透传 `content-type`、`content-length`、`content-range`、`accept-ranges`、`etag`、`last-modified`；`/s/` 另由 Worker 生成 `Content-Disposition: attachment`，不得透传上游同名头。
 - 对象 key 规范化：拒绝控制字符、反斜杠、空段、`.`、`..`；按段 RFC3986 编码。
 - Range 请求严格要求上游返回 `206`；上游忽略 Range 返回 `200` 时会 abort 并重试，耗尽后返回 `502`，绝不把整文件返回给 Range 请求。
 - HEAD 请求按 GET 签名回源，拿到元数据后 abort body，返回无 body 响应。
