@@ -46,15 +46,33 @@ describe('POST /api/sign', () => {
     const res = await sign({ bucket: 'b2test', path: '/a.png' })
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.url).toMatch(
-      /^https:\/\/cdn\.example\.com\/s\/[A-Za-z0-9_-]{12}$/,
-    )
+    expect(json.url).toMatch(/^https:\/\/s\.o7n\.cn\/s\/[A-Za-z0-9_-]{12}$/)
     expect(json.id).toHaveLength(12)
     expect(json.exp).toBeGreaterThan(Math.floor(Date.now() / 1000))
     const row = await env.DB.prepare('SELECT * FROM links WHERE id = ?')
       .bind(json.id)
       .first()
     expect(row).toMatchObject({ bucket_id: 'b2test', p: 'a.png' }) // 前导斜杠被规范化掉
+  })
+
+  test('configured public base URL overrides the origin host', async () => {
+    const ctx = createExecutionContext()
+    const req = new Request('https://s.514996.xyz/api/sign', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({ bucket: 'b2test', path: '/a.png' }),
+    })
+    const res = await worker.fetch(
+      req,
+      { ...env, PUBLIC_BASE_URL: 'https://download.example.com' },
+      ctx,
+    )
+    await waitOnExecutionContext(ctx)
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).url).toMatch(
+      /^https:\/\/download\.example\.com\/s\/[A-Za-z0-9_-]{12}$/,
+    )
   })
 
   test('expiresIn override honored', async () => {

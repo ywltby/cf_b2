@@ -83,6 +83,7 @@ describe('GET /s/<id> happy path', () => {
     expect(res.headers.get('content-disposition')).toBe(
       `attachment; filename="download.txt"; filename*=UTF-8''%E4%B9%A6%E5%90%8D.txt`,
     )
+    expect(await res.text()).toBe('TEXT')
   })
 
   test('uses filename query as safe attachment name', async () => {
@@ -101,6 +102,7 @@ describe('GET /s/<id> happy path', () => {
     expect(res.headers.get('content-disposition')).toBe(
       `attachment; filename="download.txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E4%B9%A6.txt`,
     )
+    expect(await res.text()).toBe('TEXT')
   })
 
   test('ignores unsafe filename query', async () => {
@@ -127,6 +129,7 @@ describe('GET /s/<id> happy path', () => {
     expect(res.headers.get('content-disposition')).toBe(
       `attachment; filename="unsafe-book.txt"; filename*=UTF-8''unsafe-book.txt`,
     )
+    expect(await res.text()).toBe('TEXT')
   })
 
   test('keys with special chars are RFC3986-encoded into the origin URL', async () => {

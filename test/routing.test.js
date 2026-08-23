@@ -4,12 +4,9 @@ import { resetDb } from './helpers.js'
 
 beforeEach(resetDb)
 
-describe('routing rejects everything except known endpoints', () => {
+describe('reserved routes keep their existing behavior', () => {
   const cases = [
-    ['GET', 'https://cdn.example.com/', 403],
-    ['GET', 'https://cdn.example.com/a.png', 403],
-    ['GET', 'https://cdn.example.com/test-bucket/a.png', 403],
-    ['GET', 'https://cdn.example.com/s/', 403],
+    ['GET', 'https://cdn.example.com/s/', 404],
     ['POST', 'https://cdn.example.com/s/abc123', 405],
     ['GET', 'https://cdn.example.com/s/doesnotexist', 404],
   ]

@@ -1,8 +1,8 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」访问。短链默认带过期时间，也可签发永久链接；另提供 `/b/<key>` 公开图片、`/chapter-content/<key>` 章节正文和 `/book-export/<key>` 整书交付反代路径。
+通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」和无状态只读反代。短链默认带过期时间，也可签发永久链接；未匹配专用路由的 `/<key>` 直接读取 `B_BUCKET_ID` 中的同名对象。
 
-用户只能访问形如 `https://cdn.example.com/s/<id>` 的短链；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。后端 endpoint、bucket、对象路径、密钥对用户完全不可见。
+短链形如 `https://cdn.example.com/s/<id>`；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。直读 URL 形如 `https://cdn.example.com/<key>`，用于替代原 `snippet-b2.js` 服务；两种模式共用同一套安全回源实现。
 
 公开图片可通过 `https://cdn.example.com/b/<key>` 访问。`/b/` 不查 D1、不签发、不鉴权，只把 `<key>` 映射到配置桶的固定 prefix 下，例如默认 `image/<key>`，再复用同一套 SigV4 流式回源、Range、HEAD、错误脱敏和响应头白名单逻辑。
 
@@ -13,11 +13,12 @@
 ## 安全模型
 
 - **短链不可枚举**：`id` 为 `crypto.getRandomValues` 生成的 base64url 随机串，默认 16 字符（≈96bit），下限 12。
-- **fail-closed**：D1 出错、配置非法、上游异常一律拒绝，绝不回退到直连真实路径。
+- **fail-closed**：已匹配的短链和专用路由发生 D1、配置或上游错误时直接拒绝，绝不降级到整桶直读。
+- **整桶直读是公开能力**：知道对象 key 即可通过 `/<key>` 读取；`B_BUCKET_ID` 应使用只读凭证，不能把路径保密当作访问控制。
 - **不泄露后端**：错误响应不带 body、不透传 B2/XML 错误体与 `x-amz-*` 等头；成功响应仅白名单透传 `content-type/content-length/content-range/accept-ranges/etag/last-modified`。
 - **下载文件名**：`/s/<id>?filename=<名称>` 可用安全的展示名称生成 `Content-Disposition: attachment`；缺失或非法时回退到对象 key 末段。中文名通过 `filename*` 返回，旧客户端使用安全 ASCII 备用名。
 - **稳定桶 id**：D1 存 `bucket_id`（稳定字符串，非数组下标），重排/增减桶不会让旧短链指向错桶。
-- **对象 key 安全编码**：按段 RFC3986 编码，拒绝 `..`/`.`/空段/控制字符；`?`/`#`/空格/`%2e%2e` 均作字面字符处理。
+- **对象 key 安全编码**：按段 RFC3986 编码，拒绝 `..`/`.`/空段/控制字符；直读 URL 的每个路径段只解码一次后再校验。
 - **永久链接显式标记**：D1 中 `exp = 0` 表示永不过期；普通链接使用 Unix 秒级过期时间。
 - 凭证只存 secret（`BUCKETS`/`ADMIN_PASSWORD`），D1 只存桶 id + key + 过期信息，不存任何密钥。
 
@@ -32,8 +33,11 @@
 | `GET\|HEAD /b/<key>`               | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD）            |
 | `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代 → 同名 `chapter-content/<key>`（支持 Range/HEAD） |
 | `GET\|HEAD /book-export/<key>`     | 无状态整书交付反代 → 同名 `book-export/<key>`（支持 Range/HEAD）     |
+| `GET\|HEAD /`                      | 下载测速页，四路 Range 读取 `/BLM-008.mp4` 的前 100 MiB              |
+| `GET\|HEAD /<key>`                 | 未匹配上述路由时，直读 `B_BUCKET_ID` 中的同名对象                    |
 | 已知路径用错方法                   | `405`                                                                |
-| 其它任意路径                       | `403`（含直接访问 `/a.png`、`/<bucket>/key`）                        |
+
+专用路由优先于整桶直读；与 `/api/sign`、`/api/revoke`、`/admin`、`/s/<id>`、`/b/`、`/chapter-content/` 或 `/book-export/` 冲突的对象 key 不会走兜底直读，使用百分号编码也不能绕过。
 
 ## 配置
 
@@ -70,10 +74,13 @@
 | `CACHE_TTL_SECONDS`         | `86400`  | 成功响应的 `Cache-Control: max-age`                                                       |
 | `TOKEN_TTL_SECONDS`         | `3600`   | 短链默认有效期（秒），可被签发请求覆盖                                                    |
 | `TOKEN_ID_LENGTH`           | `16`     | 短 id 字符数（12–64）                                                                     |
-| `B_BUCKET_ID`               | 无       | `/b/` 使用的固定桶 id，必须匹配 `BUCKETS` 中已有桶；缺失时 fail-closed                    |
+| `PUBLIC_BASE_URL`           | 请求源站 | 签发响应使用的公开 origin；经 CDN 回源时显式配置为 `https://s.o7n.cn`                     |
+| `B_BUCKET_ID`               | 无       | `/b/` 与 `/<key>` 直读使用的固定桶 id，必须匹配 `BUCKETS`；缺失时 fail-closed             |
 | `B_PREFIX`                  | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`                           |
 | `CHAPTER_CONTENT_BUCKET_ID` | 无       | `/chapter-content/` 使用的固定桶 id，建议绑定仅可读取该前缀的独立凭证；缺失时 fail-closed |
 | `BOOK_EXPORT_BUCKET_ID`     | 无       | `/book-export/` 复用的固定桶 id；缺失时 fail-closed                                       |
+
+`DIRECT_B2_KEY_ID` 和 `DIRECT_B2_APPLICATION_KEY` 必须通过 Worker secret 提供，供 `/<key>` 使用桶根目录只读凭证；不会改变 `/b/` 等既有路由使用的 `BUCKETS` 凭证。
 
 `BOOK_EXPORT_KEY_ID` 和 `BOOK_EXPORT_APPLICATION_KEY` 必须通过 Worker secret 提供，并绑定仅可读取 `book-export/` 的独立 application key。该路由不会回退到 `BUCKETS` 内的章节正文或图片凭证。
 
@@ -95,6 +102,8 @@ npx wrangler d1 migrations apply cdn-links
 # 3) 设置 secrets
 cat buckets.json | npx wrangler secret put BUCKETS
 npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put DIRECT_B2_KEY_ID
+npx wrangler secret put DIRECT_B2_APPLICATION_KEY
 
 # 4) 部署
 npx wrangler deploy
@@ -109,7 +118,7 @@ cp .dev.vars.template .dev.vars   # 填 BUCKETS / ADMIN_PASSWORD（.dev.vars 已
 npx wrangler dev
 ```
 
-仓库当前 `wrangler.toml` 绑定了自定义域名 `s.514996.xyz`，部署时以本地配置覆盖 Cloudflare Dashboard 中同一 Worker 的远端配置。
+仓库当前 `wrangler.toml` 绑定源站自定义域名 `s.514996.xyz`，腾讯云 EO 域名 `s.o7n.cn` 回源该 Worker。`PUBLIC_BASE_URL` 固定为 `https://s.o7n.cn`，因此经 EO 调用 `/api/sign` 时返回的短链仍使用公开 CDN 域名，而不是回源 Host。
 
 ## 使用
 
@@ -152,6 +161,12 @@ curl -X POST https://cdn.example.com/api/revoke \
 ```
 
 下载器的 Range 请求会原样转发并返回 `206`；HEAD 只返回含下载文件名的元数据、不下载全量。短链固定使用附件语义，需要浏览器内嵌展示时应使用对应的无状态读取路由。
+
+### 整桶直读与测速
+
+`GET|HEAD /<key>` 在没有命中专用路由时，把 URL 路径按段解码一次，读取 `B_BUCKET_ID` 指定桶中的同名对象。普通 GET 使用边缘缓存，Range 和 HEAD 绕过缓存；错误响应仍经过统一脱敏，不透传 B2 XML 或 `x-amz-*`。
+
+`GET|HEAD /` 返回下载测速页。测速页并发发起四个 Range 请求，合计读取 `/BLM-008.mp4` 的前 100 MiB，因此桶中需要存在至少 100 MiB 的同名对象。
 
 ### 公开图片反代 `/b/`
 

@@ -154,6 +154,13 @@ describe('GET|HEAD /b/<key>', () => {
     expect(await res.text()).toBe('')
   })
 
+  test('empty prefix config fails closed without exposing the bucket root', async () => {
+    const res = await fetchB('/b/pub123', {}, { ...B_ENV, B_PREFIX: '' })
+
+    expect(res.status).toBe(500)
+    expect(await res.text()).toBe('')
+  })
+
   test('prefix traversal config fails closed without origin fetch', async () => {
     const res = await fetchB('/b/pub123', {}, { ...B_ENV, B_PREFIX: '../' })
 

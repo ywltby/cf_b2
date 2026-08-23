@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 增加 `PUBLIC_BASE_URL`，确保经 `s.o7n.cn` CDN 回源调用签发 API 时，返回的短链仍使用公开 CDN 域名而不是 `s.514996.xyz` 回源 Host。
+- 将原 `snippet-b2.js` 的整桶只读代理和首页测速整合进主 Worker：`GET|HEAD /<key>` 使用独立桶根只读 secret 读取 `B_BUCKET_ID` 的同名对象，`GET|HEAD /` 返回四路 Range 测速页；专用路由保持优先。
+- 删除 Snippet 专用的重复 SigV4/缓存实现，统一复用主 Worker 的严格 Range 重试、边缘缓存、流式响应和错误脱敏逻辑。
 - 支持用 `/s/<id>?filename=<名称>` 设置下载展示文件名；参数非法或缺失时继续回退到对象 key 末段，不改变短链定位和权限。
 - 修复 `/s/<id>` 未触发附件下载且缺少文件名的问题；GET、HEAD、Range 统一按对象 key 末段返回安全的 `Content-Disposition`，中文名使用 RFC 5987 编码。
 - 新增 `/book-export/<key>` 无状态整书交付反代，使用固定前缀和独立只读凭证，支持 GET、HEAD、Range 与边缘缓存。

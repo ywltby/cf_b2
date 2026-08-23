@@ -1,4 +1,5 @@
 import { AwsClient } from 'aws4fetch'
+import { speedTestPage } from './speed-test.js'
 
 const ID_ROUTE = /^\/s\/([A-Za-z0-9_-]{1,64})$/
 const B_ROUTE = /^\/b\/(.+)$/
@@ -16,6 +17,7 @@ const PASS_THROUGH_HEADERS = [
   'last-modified',
 ]
 const RANGE_RETRY_ATTEMPTS = 3
+const NO_PREFIX = Symbol('no-prefix')
 
 function noStore(status, statusText) {
   return new Response(null, {
@@ -413,6 +415,30 @@ function normalizeKey(input) {
   return key
 }
 
+function decodePathKey(pathname) {
+  try {
+    return pathname
+      .slice(1)
+      .split('/')
+      .map((segment) => decodeURIComponent(segment))
+      .join('/')
+  } catch {
+    return null
+  }
+}
+
+function isReservedPath(path, env) {
+  return (
+    path === SIGN_PATH ||
+    path === REVOKE_PATH ||
+    path === (env.ADMIN_PAGE_PATH || '/admin') ||
+    B_ROUTE.test(path) ||
+    CHAPTER_CONTENT_ROUTE.test(path) ||
+    BOOK_EXPORT_ROUTE.test(path) ||
+    ID_ROUTE.test(path)
+  )
+}
+
 function normalizePrefix(input) {
   let prefix = input
   if (typeof prefix !== 'string' || prefix.length === 0) return null
@@ -439,8 +465,8 @@ async function handlePublicBucket(
     return noStore(500, 'Server Error')
   }
 
-  const prefix = normalizePrefix(rawPrefix)
-  if (!prefix) return noStore(500, 'Server Error')
+  const prefix = rawPrefix === NO_PREFIX ? '' : normalizePrefix(rawPrefix)
+  if (prefix === null) return noStore(500, 'Server Error')
 
   let buckets
   try {
@@ -561,6 +587,15 @@ async function handleSign(request, env) {
   }
   const idLen = intVar(env, 'TOKEN_ID_LENGTH', 16, 12, 64) // floor 12 (~72bit); unguessable, no rate limit
 
+  let origin
+  try {
+    origin = env.PUBLIC_BASE_URL
+      ? parseEndpoint(env.PUBLIC_BASE_URL)
+      : new URL(request.url).origin
+  } catch {
+    return jsonResponse({ error: 'server misconfigured' }, 500)
+  }
+
   let id
   for (let i = 0; i < 5; i++) {
     id = generateId(idLen)
@@ -576,7 +611,6 @@ async function handleSign(request, env) {
       return noStore(503, 'Service Unavailable') // D1 quota / error
     }
   }
-  const origin = new URL(request.url).origin
   const url = `${origin}/s/${id}`
   return permanent
     ? jsonResponse({ url, id, exp: null, permanent: true })
@@ -771,7 +805,27 @@ export default {
       return handleDeliver(request, env, ctx, m[1])
     }
 
-    return noStore(403, 'Forbidden')
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return noStore(405, 'Method Not Allowed')
+    }
+    if (path === '/') return speedTestPage(request.method)
+
+    const key = decodePathKey(path)
+    if (key && isReservedPath(`/${key}`, env)) {
+      return noStore(404, 'Not Found')
+    }
+    return handlePublicBucket(
+      request,
+      env,
+      ctx,
+      key,
+      env.B_BUCKET_ID,
+      NO_PREFIX,
+      {
+        keyId: env.DIRECT_B2_KEY_ID,
+        applicationKey: env.DIRECT_B2_APPLICATION_KEY,
+      },
+    )
   },
 
   async scheduled(event, env, ctx) {

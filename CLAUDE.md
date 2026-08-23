@@ -15,6 +15,7 @@ This file provides guidance to Claude Code when working with this repository.
 - `GET|HEAD /b/<key>` 无状态公开图片反代，不查 D1、不签发、不鉴权。
 - `GET|HEAD /chapter-content/<key>` 无状态章节正文反代，使用独立只读桶凭证，不查 D1、不鉴权。
 - `GET|HEAD /book-export/<key>` 无状态整书交付反代，使用仅可读取 `book-export/` 的独立凭证，不查 D1、不鉴权。
+- `GET|HEAD /<key>` 在未匹配专用路由时直读 `B_BUCKET_ID` 中的同名对象；`GET|HEAD /` 返回 100 MiB 四路 Range 下载测速页。
 - `POST /api/revoke` 撤销短链。
 - `GET /admin` 同源静态签发页面，不嵌入 secret。
 
@@ -45,9 +46,10 @@ This file provides guidance to Claude Code when working with this repository.
 - Worker 名称：`cf_b2`
 - 入口：`index.js`
 - 自定义域名：`s.514996.xyz`
+- 对外 CDN origin：`PUBLIC_BASE_URL=https://s.o7n.cn`，短链签发响应不得回退为回源 Host
 - D1：`DB` -> `cdn-links`
 - Cron：每天 `0 3 * * *` 清理过期行
-- 公开图片反代：`B_BUCKET_ID` 指向 `BUCKETS` 中已有桶 id，`B_PREFIX` 当前为 `image/`
+- 整桶直读和公开图片反代：`B_BUCKET_ID` 指向 `BUCKETS` 中已有桶 id，`B_PREFIX` 当前为 `image/` 且仅用于 `/b/`
 - 章节正文反代：`CHAPTER_CONTENT_BUCKET_ID` 指向 `BUCKETS` 中仅允许读取 `chapter-content/` 的桶配置
 - 整书交付反代：`BOOK_EXPORT_BUCKET_ID` 复用 `BUCKETS` 中的桶连接信息，`BOOK_EXPORT_KEY_ID` 与 `BOOK_EXPORT_APPLICATION_KEY` 提供仅限 `book-export/` 的独立只读凭证
 
@@ -92,12 +94,13 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - `GET|HEAD /b/<key>`：不查 D1，把 key 映射为 `<B_PREFIX><key>`，按 `B_BUCKET_ID` 指定桶签名回源并流式返回。
 - `GET|HEAD /chapter-content/<key>`：不查 D1，按 `CHAPTER_CONTENT_BUCKET_ID` 使用完整同名对象 key 签名回源并流式返回。
 - `GET|HEAD /book-export/<key>`：不查 D1，固定读取同名 `book-export/` 对象 key，并使用独立只读凭证签名回源。
+- `GET|HEAD /`：返回测速页，四路 Range 读取 `/BLM-008.mp4` 前 100 MiB。
+- `GET|HEAD /<key>`：未匹配上述专用路由时，按段解码 URL 路径一次，使用 `DIRECT_B2_KEY_ID` / `DIRECT_B2_APPLICATION_KEY` 直读 `B_BUCKET_ID` 中的同名对象。
 - 已知路径用错方法返回 `405`。
-- 其它路径返回 `403`。
 
 ## 安全与交付规则
 
-- fail-closed：D1 错误、配置非法、上游异常一律拒绝，不回退到真实路径。
+- fail-closed：已经匹配的短链或专用路由发生 D1、配置、上游错误时一律拒绝，不回退到整桶直读。
 - 不泄露后端：交付端错误响应无 body，不透传 B2/XML 错误体、`x-amz-*`、endpoint、bucket name 或 key。
 - 成功响应只白名单透传 `content-type`、`content-length`、`content-range`、`accept-ranges`、`etag`、`last-modified`；`/s/` 另由 Worker 生成 `Content-Disposition: attachment`，不得透传上游同名头。
 - 对象 key 规范化：拒绝控制字符、反斜杠、空段、`.`、`..`；按段 RFC3986 编码。
@@ -105,6 +108,8 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 - HEAD 请求按 GET 签名回源，拿到元数据后 abort body，返回无 body 响应。
 - 普通 GET 先查 D1、校验 exp，再查 Cache API；内部缓存键按 `bucketId+key` 去重。
 - `/b/` 不使用 D1 或签发状态，配置缺失或非法时 fail-closed；普通 GET 成功响应写入边缘缓存，Range/HEAD 绕过缓存；`Content-Type` 不猜测，完全来自上游对象 metadata。
+- 整桶直读不使用 D1、不鉴权，知道对象 key 即可读取；复用 `B_BUCKET_ID`、独立桶根只读凭证和统一交付逻辑，专用路由始终优先。
+- 直读路径解码后若会命中任一专用路由则返回 `404`，防止用百分号编码绕过固定前缀或独立凭证。
 - `/chapter-content/` 只允许固定前缀，使用独立桶配置且不回退到图片凭证；普通 GET 缓存、Range/HEAD 绕过缓存。
 - `/book-export/` 只允许固定前缀，使用独立只读凭证且不回退到章节正文或图片凭证；普通 GET 缓存、Range/HEAD 绕过缓存。
 - 过期普通链接访问时 best-effort 惰性删除；Cron 批量删除 `exp > 0 AND exp < now`；永久链接不会被清理。
@@ -115,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 当前测试覆盖：
 
-- 路由默认拒绝和方法限制。
+- 专用路由优先级、整桶直读、测速页和方法限制。
 - 签发鉴权、bucket/key 校验、TTL、永久链接、互斥参数。
 - 流式交付、头部脱敏、内部缓存键、特殊字符编码。
 - `/b/` 公开图片反代、Range、HEAD、方法限制和配置/key 越界拒绝。
