@@ -5,7 +5,7 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from 'cloudflare:test'
-import worker from '../index.js'
+import worker from '../src/shortlink.js'
 import {
   expect,
   test,
@@ -43,6 +43,7 @@ describe('GET /s/<id> happy path', () => {
       })
     const res = await SELF.fetch('https://cdn.example.com/s/id0000000001')
     expect(res.status).toBe(200)
+    expect(res.headers.get('location')).toBeNull()
     expect(await res.text()).toBe('PNGDATA')
     expect(res.headers.get('content-type')).toBe('image/png')
     expect(res.headers.get('accept-ranges')).toBe('bytes')

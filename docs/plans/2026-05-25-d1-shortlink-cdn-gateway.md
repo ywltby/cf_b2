@@ -1,23 +1,24 @@
 # D1 短链 + 私有 S3 兼容多桶 CDN 网关
 
-本文记录本项目从透明 B2 代理重构为 D1 短链 CDN 网关后的当前设计状态。历史实现计划已经落地；后续开发应以当前代码、测试和本文件的“当前状态”描述为准。
+本文记录本项目从透明 B2 代理重构为 D1 短链 CDN 网关后的逻辑设计。2026-08-25 起部署拓扑拆为 shortlink 与 mapper 两个 Worker；具体拆分与切流步骤见 `docs/plans/2026-08-25-split-shortlink-mapper-workers.md`。
 
 ## 目标
 
-通过 Cloudflare Worker 为一个或多个私有 S3 兼容存储桶提供不可枚举短链访问。管理员签发 `/s/<id>` 短链，Worker 通过 D1 把 id 解析成桶 id、对象 key 和过期信息，再用 AWS SigV4 签名流式回源。另提供 `/b/<key>` 无状态公开图片反代路径，固定映射到配置桶的 `image/<key>` 一类对象。
+通过 Cloudflare Worker 为一个或多个私有 S3 兼容存储桶提供不可枚举短链访问。管理员签发 `/s/<id>` 短链，Worker 通过 D1 把 id 解析成桶 id、对象 key 和过期信息，再用 AWS SigV4 签名流式回源。无状态 mapper 另外提供 URL 路径与 B2 对象 key 完全一致的整桶直读。
 
 目标约束：
 
 - 对用户隐藏 endpoint、bucket name、对象 key 和所有密钥。
 - 普通链接按 Unix 秒过期，永久链接显式使用 `exp = 0`。
-- `/b/` 不查 D1、不签发、不鉴权，只从固定桶和固定 prefix 反代公开图片。
 - 成功交付全程流式，不缓冲上游 body。
 - 支持 Range、HEAD、视频播放和多线程下载。
 - fail-closed：D1、配置或上游异常时拒绝请求，不回退到真实路径。
 
 ## 当前技术栈
 
-- Cloudflare Workers ES module worker，入口 `index.js`
+- Cloudflare Workers ES module，共享 `src/b2.js`
+- shortlink 入口 `src/shortlink.js`：D1、Cron、管理 API、`/s/<id>`
+- mapper 入口 `src/mapper.js`：全部无状态只读路由
 - Cloudflare D1，binding `DB`
 - Cloudflare Cache API
 - `aws4fetch` 负责 S3 SigV4 签名
@@ -27,25 +28,23 @@
 
 ## 当前配置
 
-`wrangler.toml` 当前配置要点：
+`wrangler.toml` 是 shortlink 配置；`wrangler.mapper.toml` 是无状态 mapper 配置：
 
 | 类型   | 名称                | 当前值 / 说明                        |
 | ------ | ------------------- | ------------------------------------ |
 | Worker | `name`              | `cf_b2`                              |
-| Worker | `main`              | `index.js`                           |
-| Route  | custom domain       | `s.514996.xyz`                       |
+| Worker | shortlink `main`    | `src/shortlink.js`                   |
+| Worker | mapper `main`       | `src/mapper.js`                      |
+| Route  | shortlink domain    | `s.514996.xyz`                       |
+| Route  | mapper domain       | `m.514996.xyz`（部署前确认）         |
 | var    | `CACHE_TTL_SECONDS` | `"86400"`，成功 GET 响应的 `max-age` |
 | var    | `TOKEN_TTL_SECONDS` | `"3600"`，普通短链默认有效秒数       |
 | var    | `TOKEN_ID_LENGTH`   | `"16"`，短 id 字符数，代码允许 12-64 |
-| var    | `B_BUCKET_ID`       | `"b2main"`，`/b/` 固定使用的桶 id    |
-| var    | `B_PREFIX`          | `"image/"`，`/b/` 固定对象前缀       |
+| var    | `B_BUCKET_ID`       | mapper 的 `/<key>` 直读桶 id         |
 | D1     | `DB`                | `cdn-links`                          |
 | Cron   | `[triggers]`        | `0 3 * * *`，每日清理过期普通链接    |
 
-Secrets：
-
-- `BUCKETS`：JSON 数组，每项 `{id,name,endpoint,region,keyId,applicationKey}`。
-- `ADMIN_PASSWORD`：签发 / 撤销 API 密码。
+Secrets 按角色拆分：shortlink 使用 `BUCKETS` 和 `ADMIN_PASSWORD`；mapper 只使用 `BUCKETS`。每个桶 id 的所有回源统一使用该配置项内无文件名前缀限制的只读 key。Cloudflare 已保存的 Secret 值不可回读。
 
 `endpoint` 支持裸 host、`https://host:port`、`http://host:port`，但必须是纯 origin，不允许 path、query、userinfo。`http` 会明文传输 SigV4 鉴权头和对象数据，只应在可信网络使用。
 
@@ -73,15 +72,18 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 ## 路由
 
-| 方法 + 路径          | 行为                   |
-| -------------------- | ---------------------- |
-| `POST /api/sign`     | 管理员鉴权，生成短链   |
-| `POST /api/revoke`   | 管理员鉴权，删除 D1 行 |
-| `GET /admin`         | 静态同源签发页面       |
-| `GET\|HEAD /s/<id>`  | 查 D1 并流式交付       |
-| `GET\|HEAD /b/<key>` | 无状态公开图片反代     |
-| 已知路径用错方法     | `405`                  |
-| 其它路径             | `403`                  |
+| Worker    | 方法 + 路径                        | 行为                   |
+| --------- | ---------------------------------- | ---------------------- |
+| shortlink | `POST /api/sign`                   | 管理员鉴权，生成短链   |
+| shortlink | `POST /api/revoke`                 | 管理员鉴权，删除 D1 行 |
+| shortlink | `GET /admin`                       | 静态同源签发页面       |
+| shortlink | `GET\|HEAD /s/<id>`                | 查 D1 并流式交付       |
+| mapper    | `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代     |
+| mapper    | `GET\|HEAD /book-export/<key>`     | 无状态整书反代         |
+| mapper    | `GET\|HEAD /`                      | Range 测速页           |
+| mapper    | `GET\|HEAD /<key>`                 | 同名 B2 对象直读       |
+
+shortlink 对 mapper 路径返回 `404`；mapper 对 `/s`、`/api`、`/admin` 返回 `404`，包括百分号编码变体。`/s/<id>` 不重定向，真实 B2 key 只在 shortlink Worker 内部使用。
 
 签发普通链接：
 
@@ -114,16 +116,6 @@ CREATE INDEX IF NOT EXISTS idx_links_exp ON links(exp);
 
 `permanent:true` 和 `expiresIn` 互斥；同时传会返回 `403`。
 
-`/b/<key>` 映射：
-
-```text
-URL:        /b/<key>
-origin key: <B_PREFIX><key>
-default:    image/<key>
-```
-
-`key` 无扩展名是预期行为。Worker 不根据扩展名猜测或设置 `Content-Type`；类型完全由对象上传时写入的 S3/B2 metadata 承载，并经白名单响应头透传。
-
 ## 交付流程
 
 1. 匹配 `/s/<id>`，只允许 GET 或 HEAD。
@@ -137,14 +129,6 @@ default:    image/<key>
 9. 普通 GET 先查 Cache API，miss 后签名回源并 `new Response(resp.body, ...)` 流式返回。
 10. 成功普通 GET 用 `ctx.waitUntil(cache.put(...))` 异步写缓存。
 
-`/b/` 交付流程：
-
-1. 匹配 `/b/<key>`，只允许 GET 或 HEAD。
-2. 校验 `B_BUCKET_ID`、`B_PREFIX` 和 `BUCKETS`。
-3. 规范化 URL key，拒绝空段、`.`、`..`、反斜杠和控制字符。
-4. 拼成 `<B_PREFIX><key>`，保证只能命中固定 prefix 下对象。
-5. 调用同一套 SigV4 回源交付逻辑；普通 GET 成功响应写入边缘缓存，Range、HEAD、错误脱敏和响应头白名单与 `/s/` 一致。
-
 ## 安全规则
 
 - D1 错误返回 `503`，不回源。
@@ -155,7 +139,6 @@ default:    image/<key>
 - 不透传 `x-amz-*`、XML 错误体、endpoint、bucket name、对象 key、密钥。
 - 对象 key 拒绝控制字符、反斜杠、空段、`.`、`..`，并按段 RFC3986 编码。
 - Range 请求如果上游忽略 Range 返回 `200`，最多重试 3 次；耗尽后取消 body 并返回 `502`。
-- `/b/` 配置缺失或非法时返回无 body 错误响应，不回退到其它桶或真实路径。
 
 ## 清理策略
 
@@ -171,7 +154,7 @@ default:    image/<key>
 npm test
 ```
 
-测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 11 个测试文件、54 个用例：
+测试由 `pretest` 流式守卫和 Vitest Worker 测试组成。当前覆盖 13 个测试文件、69 个用例，包括两个 Worker 的路由边界：
 
 - `test/routing.test.js`：路由、方法限制、默认拒绝。
 - `test/sign.test.js`：管理员鉴权、bucket/key 校验、TTL、永久链接、互斥参数、配置 fail-closed。
@@ -182,8 +165,8 @@ npm test
 - `test/revoke.test.js`：撤销短链。
 - `test/scheduled.test.js`：Cron 清理保留永久链接。
 - `test/admin.test.js`：`/admin` 页面存在且不嵌入 secret。
-- `test/b.test.js`：`/b/` 正常流式、边缘缓存、Range、HEAD、方法限制、key/prefix 配置越界拒绝。
-- `test/smoke.test.js`：未知路径拒绝。
+- `test/direct.test.js`：mapper 整桶直读、路径不改写与测速页。
+- `test/worker-boundaries.test.js`：两个 Worker 的命名空间隔离与编码绕过防护。
 
 完成行为变更前应至少运行：
 
@@ -193,9 +176,9 @@ npm test
 npx wrangler deploy --dry-run
 ```
 
-## 已部署状态
+## 拆分前已部署状态
 
-最近一次确认部署到 Cloudflare Worker：
+以下仅是拆分前最后一次记录，不表示当前工作区已经部署：
 
 - Worker：`cf_b2`
 - 自定义域名：`s.514996.xyz`

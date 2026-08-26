@@ -11,6 +11,7 @@ node_modules/
 .env
 .idea/
 .dev.vars
+.dev.vars.mapper
 .wrangler/
 wrangler.toml
 # Local-only secret material / scratch files (never commit)

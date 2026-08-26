@@ -1,3 +1,9 @@
-# Copy to .dev.vars for `wrangler dev`. .dev.vars is gitignored.
-BUCKETS = '[{"id":"b2main","name":"1145141919810","endpoint":"s3.us-west-004.backblazeb2.com","region":"us-west-004","keyId":"<key id>","applicationKey":"<application key>"}]'
-ADMIN_PASSWORD = "<long random admin password>"
+# Copy to .dev.vars, replace every placeholder, then use it for local dev or:
+#   npx wrangler secret bulk .dev.vars
+# .dev.vars is gitignored. Non-secret settings stay in wrangler.toml.
+
+# Must contain every bucket id that an existing or newly signed short link may reference.
+# Each key must be read-only and have no file-prefix restriction for its bucket.
+BUCKETS = '[{"id":"1145141919810","name":"1145141919810","endpoint":"s3.us-west-004.backblazeb2.com","region":"us-west-004","keyId":"<read-only-key-id>","applicationKey":"<read-only-application-key>"}]'
+
+ADMIN_PASSWORD = "<long-random-admin-password>"

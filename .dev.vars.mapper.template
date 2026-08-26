@@ -1,0 +1,8 @@
+# Copy to .dev.vars.mapper, replace every placeholder, then use it for:
+#   npm run dev:mapper
+#   npx wrangler secret bulk .dev.vars.mapper -c wrangler.mapper.toml
+# .dev.vars.mapper is gitignored. Non-secret settings stay in wrangler.mapper.toml.
+
+# Must contain the B_BUCKET_ID referenced by wrangler.mapper.toml.
+# Each key must be read-only and have no prefix restriction for its bucket.
+BUCKETS = '[{"id":"1145141919810","name":"1145141919810","endpoint":"s3.us-west-004.backblazeb2.com","region":"us-west-004","keyId":"<read-only-key-id>","applicationKey":"<read-only-application-key>"}]'

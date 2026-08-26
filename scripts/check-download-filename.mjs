@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { requestedDownloadFilename } from '../index.js'
+import { requestedDownloadFilename } from '../src/b2.js'
 
 assert.equal(
   requestedDownloadFilename(

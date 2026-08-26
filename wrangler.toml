@@ -1,5 +1,5 @@
 name = "cf_b2"
-main = "index.js"
+main = "src/shortlink.js"
 # Pins Workers runtime behavior so future runtime changes can't silently break this Worker.
 compatibility_date = "2024-09-01"
 workers_dev = false
@@ -10,16 +10,10 @@ CACHE_TTL_SECONDS = "86400"
 TOKEN_TTL_SECONDS = "3600"
 TOKEN_ID_LENGTH = "16"
 PUBLIC_BASE_URL = "https://s.o7n.cn"
-B_BUCKET_ID = "1145141919810"
-B_PREFIX = "image/"
-CHAPTER_CONTENT_BUCKET_ID = "chapter-content"
-BOOK_EXPORT_BUCKET_ID = "chapter-content"
 
-# Secrets (set via `wrangler secret put`, do NOT put values here):
-#   BUCKETS         JSON array: [{"id","name","endpoint","region","keyId","applicationKey"}]
-#   ADMIN_PASSWORD  admin API password
-#   DIRECT_B2_KEY_ID / DIRECT_B2_APPLICATION_KEY  bucket-root read-only credentials
-#   BOOK_EXPORT_KEY_ID / BOOK_EXPORT_APPLICATION_KEY  book-export/ only read credentials
+# Secrets (set via `wrangler secret bulk .dev.vars`, do NOT put values here):
+#   BUCKETS
+#   ADMIN_PASSWORD
 
 [[d1_databases]]
 binding = "DB"

@@ -5,7 +5,7 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from 'cloudflare:test'
-import worker from '../index.js'
+import worker from '../src/shortlink.js'
 import {
   expect,
   test,

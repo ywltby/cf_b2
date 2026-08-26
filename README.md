@@ -1,19 +1,20 @@
 # Cloudflare Worker · D1 短链 CDN 网关
 
-通过 Cloudflare Worker 为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供「不可枚举短链」和无状态只读反代。短链默认带过期时间，也可签发永久链接；未匹配专用路由的 `/<key>` 直接读取 `B_BUCKET_ID` 中的同名对象。
+同一仓库部署两个 Cloudflare Worker，为**私有** S3 兼容存储桶（Backblaze B2 / Cloudflare R2 / AWS S3 / MinIO 等）提供不可枚举短链和无状态只读反代：
 
-短链形如 `https://cdn.example.com/s/<id>`；Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲。直读 URL 形如 `https://cdn.example.com/<key>`，用于替代原 `snippet-b2.js` 服务；两种模式共用同一套安全回源实现。
+- `src/shortlink.js`：`/api/*`、`/admin`、`/s/<id>`，持有 D1 和 Cron。
+- `src/mapper.js`：仅处理 `GET|HEAD /<key>` 的同名对象映射，不持有 D1，可跨账号水平扩容。
 
-公开图片可通过 `https://cdn.example.com/b/<key>` 访问。`/b/` 不查 D1、不签发、不鉴权，只把 `<key>` 映射到配置桶的固定 prefix 下，例如默认 `image/<key>`，再复用同一套 SigV4 流式回源、Range、HEAD、错误脱敏和响应头白名单逻辑。
+短链形如 `https://cdn.example.com/s/<id>`；短链 Worker 经 D1 把 `<id>` 解析成「桶 + 对象 key + 过期信息」，再用 AWS SigV4 签名**流式**回源，全程不缓冲、不重定向，也不会把真实 B2 key 暴露给客户端。直读 URL 形如 `https://cdn.example.com/<key>`，由 mapper 替代原 `snippet-b2.js` 服务；两个 Worker 共用 `src/b2.js` 中同一套安全回源实现。
 
-章节正文可通过与 B2 对象 key 相同的 `https://cdn.example.com/chapter-content/...` 访问。该路径同样不查 D1、不鉴权，只允许 `chapter-content/` 前缀，并使用 `CHAPTER_CONTENT_BUCKET_ID` 指定的只读凭证签名回源。
+`chapter-content/...`、`book-export/...` 等路径都按普通对象 key 处理，不存在专用分支或额外桶配置。
 
 > 基于官方样例 [backblaze-b2-samples/cloudflare-b2](https://github.com/backblaze-b2-samples/cloudflare-b2) 重构而来（v2，与 1.x 不兼容）。
 
 ## 安全模型
 
 - **短链不可枚举**：`id` 为 `crypto.getRandomValues` 生成的 base64url 随机串，默认 16 字符（≈96bit），下限 12。
-- **fail-closed**：已匹配的短链和专用路由发生 D1、配置或上游错误时直接拒绝，绝不降级到整桶直读。
+- **fail-closed**：已匹配的短链发生 D1、配置或上游错误时直接拒绝，绝不降级到整桶直读。
 - **整桶直读是公开能力**：知道对象 key 即可通过 `/<key>` 读取；`B_BUCKET_ID` 应使用只读凭证，不能把路径保密当作访问控制。
 - **不泄露后端**：错误响应不带 body、不透传 B2/XML 错误体与 `x-amz-*` 等头；成功响应仅白名单透传 `content-type/content-length/content-range/accept-ranges/etag/last-modified`。
 - **下载文件名**：`/s/<id>?filename=<名称>` 可用安全的展示名称生成 `Content-Disposition: attachment`；缺失或非法时回退到对象 key 末段。中文名通过 `filename*` 返回，旧客户端使用安全 ASCII 备用名。
@@ -24,36 +25,33 @@
 
 ## 路由
 
-| 方法 + 路径                        | 行为                                                                 |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| `POST /api/sign`                   | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应              |
-| `POST /api/revoke`                 | 管理员鉴权 → 删除某 id                                               |
-| `GET /admin`                       | 简易同源签发页面（不嵌入 secret）                                    |
-| `GET\|HEAD /s/<id>[?filename=...]` | 查 D1 → 带安全展示文件名的附件流式交付（支持 Range/多线程下载）      |
-| `GET\|HEAD /b/<key>`               | 无状态公开图片反代 → `<B_PREFIX><key>`（支持 Range/HEAD）            |
-| `GET\|HEAD /chapter-content/<key>` | 无状态章节正文反代 → 同名 `chapter-content/<key>`（支持 Range/HEAD） |
-| `GET\|HEAD /book-export/<key>`     | 无状态整书交付反代 → 同名 `book-export/<key>`（支持 Range/HEAD）     |
-| `GET\|HEAD /`                      | 下载测速页，四路 Range 读取 `/BLM-008.mp4` 的前 100 MiB              |
-| `GET\|HEAD /<key>`                 | 未匹配上述路由时，直读 `B_BUCKET_ID` 中的同名对象                    |
-| 已知路径用错方法                   | `405`                                                                |
+| Worker    | 方法 + 路径                        | 行为                                                            |
+| --------- | ---------------------------------- | --------------------------------------------------------------- |
+| shortlink | `POST /api/sign`                   | 管理员鉴权 → 生成短链 → `{url, id, exp}` 或永久链接响应         |
+| shortlink | `POST /api/revoke`                 | 管理员鉴权 → 删除某 id                                          |
+| shortlink | `GET /admin`                       | 简易同源签发页面（不嵌入 secret）                               |
+| shortlink | `GET\|HEAD /s/<id>[?filename=...]` | 查 D1 → 带安全展示文件名的附件流式交付（支持 Range/多线程下载） |
+| mapper    | `GET\|HEAD /<key>`                 | 直读 `B_BUCKET_ID` 中的同名对象；空 key（`/`）返回 `404`        |
 
-专用路由优先于整桶直读；与 `/api/sign`、`/api/revoke`、`/admin`、`/s/<id>`、`/b/`、`/chapter-content/` 或 `/book-export/` 冲突的对象 key 不会走兜底直读，使用百分号编码也不能绕过。
+shortlink 对 mapper 路径返回 `404`。mapper 没有保留命名空间：`/s/...`、`/api/...`、`/admin...` 及其编码形式都和其它非空路径一样映射为 B2 对象 key，因此 CDN 必须把短链路由发往 shortlink Worker。
 
 ## 配置
 
-### secrets（`wrangler secret put`，绝不写进 wrangler.toml）
+### secrets（`wrangler secret put/bulk`，绝不写进 Wrangler 配置）
 
-| 名称             | 说明                                                                      |
-| ---------------- | ------------------------------------------------------------------------- |
-| `BUCKETS`        | 桶配置组 JSON 数组，每项 `{id,name,endpoint,region,keyId,applicationKey}` |
-| `ADMIN_PASSWORD` | 签发 / 撤销 API 密码（长随机串，按 API key 对待）                         |
+| 名称             | shortlink | mapper | 说明                                                                      |
+| ---------------- | --------- | ------ | ------------------------------------------------------------------------- |
+| `BUCKETS`        | 是        | 是     | 桶配置组 JSON 数组，每项 `{id,name,endpoint,region,keyId,applicationKey}` |
+| `ADMIN_PASSWORD` | 是        | 否     | 签发 / 撤销 API 密码（长随机串，按 API key 对待）                         |
 
-`BUCKETS` 示例（`buckets.json`）：
+短链模板是 `.dev.vars.template`，mapper 模板是 `.dev.vars.mapper.template`。Cloudflare Worker Secret 的值在写入后会在 Wrangler 和控制台隐藏，CLI 只能用 `wrangler secret list` 盘点名称；本地副本丢失时必须从原凭证系统恢复，无法恢复的密码或 B2 application key 应轮换后重新上传。
+
+`BUCKETS` 值示例：
 
 ```json
 [
   {
-    "id": "b2main",
+    "id": "1145141919810",
     "name": "1145141919810",
     "endpoint": "s3.us-west-004.backblazeb2.com",
     "region": "us-west-004",
@@ -65,24 +63,18 @@
 
 - `id`：稳定唯一标识（`[A-Za-z0-9_-]{1,64}`），签发时用它引用桶。
 - `endpoint`：裸 host（默认补 `https://`）、`https://host:port` 或 `http://host:port`——任意可连通的 S3 兼容端点。⚠️ http 以明文发送 SigV4 鉴权头与数据，仅在可信网络使用。
+- `B_BUCKET_ID` 指向 mapper 读取的桶；mapper 只需该桶一组无文件名前缀限制的只读 key。
 - 加桶 = 往数组里加一项带新 `id` 的对象；旧短链不受影响。
 
-### vars（`wrangler.toml [vars]`）
+### vars
 
-| 名称                        | 默认     | 说明                                                                                      |
-| --------------------------- | -------- | ----------------------------------------------------------------------------------------- |
-| `CACHE_TTL_SECONDS`         | `86400`  | 成功响应的 `Cache-Control: max-age`                                                       |
-| `TOKEN_TTL_SECONDS`         | `3600`   | 短链默认有效期（秒），可被签发请求覆盖                                                    |
-| `TOKEN_ID_LENGTH`           | `16`     | 短 id 字符数（12–64）                                                                     |
-| `PUBLIC_BASE_URL`           | 请求源站 | 签发响应使用的公开 origin；经 CDN 回源时显式配置为 `https://s.o7n.cn`                     |
-| `B_BUCKET_ID`               | 无       | `/b/` 与 `/<key>` 直读使用的固定桶 id，必须匹配 `BUCKETS`；缺失时 fail-closed             |
-| `B_PREFIX`                  | `image/` | `/b/` 映射前缀；非法时 fail-closed，当前部署显式配置为 `image/`                           |
-| `CHAPTER_CONTENT_BUCKET_ID` | 无       | `/chapter-content/` 使用的固定桶 id，建议绑定仅可读取该前缀的独立凭证；缺失时 fail-closed |
-| `BOOK_EXPORT_BUCKET_ID`     | 无       | `/book-export/` 复用的固定桶 id；缺失时 fail-closed                                       |
-
-`DIRECT_B2_KEY_ID` 和 `DIRECT_B2_APPLICATION_KEY` 必须通过 Worker secret 提供，供 `/<key>` 使用桶根目录只读凭证；不会改变 `/b/` 等既有路由使用的 `BUCKETS` 凭证。
-
-`BOOK_EXPORT_KEY_ID` 和 `BOOK_EXPORT_APPLICATION_KEY` 必须通过 Worker secret 提供，并绑定仅可读取 `book-export/` 的独立 application key。该路由不会回退到 `BUCKETS` 内的章节正文或图片凭证。
+| 名称                | Worker             | 默认          | 说明                                                                       |
+| ------------------- | ------------------ | ------------- | -------------------------------------------------------------------------- |
+| `CACHE_TTL_SECONDS` | shortlink + mapper | `86400` / `0` | shortlink / mapper 缓存秒数；`0` 表示 `no-store` 且不使用 Worker Cache API |
+| `TOKEN_TTL_SECONDS` | shortlink          | `3600`        | 短链默认有效期（秒），可被签发请求覆盖                                     |
+| `TOKEN_ID_LENGTH`   | shortlink          | `16`          | 短 id 字符数（12–64）                                                      |
+| `PUBLIC_BASE_URL`   | shortlink          | 请求源站      | 签发响应使用的公开 origin；当前为 `https://s.o7n.cn`                       |
+| `B_BUCKET_ID`       | mapper             | 无            | `/<key>` 直读使用的固定桶 id，必须匹配 `BUCKETS`；缺失时 fail-closed       |
 
 ### D1
 
@@ -93,32 +85,42 @@
 ```bash
 npm install
 
-# 1) 建 D1，把输出的 database_id 填进 wrangler.toml 的 [[d1_databases]].database_id
+# 仅首次部署 shortlink：建 D1 并填写 wrangler.toml
 npx wrangler d1 create cdn-links
-
-# 2) 建表（远端；本地开发加 --local）
 npx wrangler d1 migrations apply cdn-links
 
-# 3) 设置 secrets
-cat buckets.json | npx wrangler secret put BUCKETS
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler secret put DIRECT_B2_KEY_ID
-npx wrangler secret put DIRECT_B2_APPLICATION_KEY
+# shortlink
+cp .dev.vars.template .dev.vars
+npx wrangler secret bulk .dev.vars -c wrangler.toml
+npm run deploy
 
-# 4) 部署
-npx wrangler deploy
+# mapper（不建 D1）
+cp .dev.vars.mapper.template .dev.vars.mapper
+npm run deploy:mapper
+npx wrangler secret bulk .dev.vars.mapper -c wrangler.mapper.toml
 ```
+
+首次创建 mapper 时，先部署脚本、再执行 `secret bulk`；在 Secret 齐全并完成直连验证前，不要把该源站加入 CDN。每个 Cloudflare 账号都应使用自己的 Worker 名称和自定义域名，当前仓库里的 `wrangler.mapper.toml` 只代表其中一个账号。
 
 桶为私有，Cloudflare 默认不缓存带 `Authorization` 的上游响应；如需缓存，在桶的 Bucket Info 设 `{"Cache-Control":"public"}`（Backblaze B2）。
 
 ### 本地开发
 
 ```bash
-cp .dev.vars.template .dev.vars   # 填 BUCKETS / ADMIN_PASSWORD（.dev.vars 已 gitignore）
-npx wrangler dev
+cp .dev.vars.template .dev.vars
+cp .dev.vars.mapper.template .dev.vars.mapper
+npm run dev
+npm run dev:mapper
 ```
 
-仓库当前 `wrangler.toml` 绑定源站自定义域名 `s.514996.xyz`，腾讯云 EO 域名 `s.o7n.cn` 回源该 Worker。`PUBLIC_BASE_URL` 固定为 `https://s.o7n.cn`，因此经 EO 调用 `/api/sign` 时返回的短链仍使用公开 CDN 域名，而不是回源 Host。
+`wrangler.toml` 是 shortlink 配置，绑定 `s.514996.xyz`；`wrangler.mapper.toml` 是无状态 mapper 配置。腾讯云 EO 域名 `s.o7n.cn` 应按顺序配置：
+
+| EO 路径规则                     | 源站           |
+| ------------------------------- | -------------- |
+| `/api/*`、精确 `/admin`、`/s/*` | `s.514996.xyz` |
+| 默认 `/*`                       | mapper 源站组  |
+
+每个源站的回源 Host 必须跟随该源站自己的域名。额外 Cloudflare 账号只需复制 mapper 配置，改 Worker 名称和该账号拥有的自定义域名，上传同一组 mapper Secret；不要复制 D1、Cron 或管理员 Secret。`PUBLIC_BASE_URL=https://s.o7n.cn` 保证签发结果继续使用公开 CDN 域名。
 
 ## 使用
 
@@ -162,42 +164,11 @@ curl -X POST https://cdn.example.com/api/revoke \
 
 下载器的 Range 请求会原样转发并返回 `206`；HEAD 只返回含下载文件名的元数据、不下载全量。短链固定使用附件语义，需要浏览器内嵌展示时应使用对应的无状态读取路由。
 
-### 整桶直读与测速
+### 整桶直读
 
-`GET|HEAD /<key>` 在没有命中专用路由时，把 URL 路径按段解码一次，读取 `B_BUCKET_ID` 指定桶中的同名对象。普通 GET 使用边缘缓存，Range 和 HEAD 绕过缓存；错误响应仍经过统一脱敏，不透传 B2 XML 或 `x-amz-*`。
+`GET|HEAD /<key>` 把 URL 路径按段解码一次，读取 `B_BUCKET_ID` 指定桶中的同名对象。当前 mapper 将 `CACHE_TTL_SECONDS` 设为 `0`，所有 GET、HEAD 和 Range 请求都直接回源 B2，响应为 `Cache-Control: no-store`；错误响应仍经过统一脱敏，不透传 B2 XML 或 `x-amz-*`。
 
-`GET|HEAD /` 返回下载测速页。测速页并发发起四个 Range 请求，合计读取 `/BLM-008.mp4` 的前 100 MiB，因此桶中需要存在至少 100 MiB 的同名对象。
-
-### 公开图片反代 `/b/`
-
-外部服务可自行生成确定性 key，并把图片上传到配置桶的固定 prefix 下：
-
-```text
-B2 object key: image/<our_id>
-public URL:    https://cdn.example.com/b/<our_id>
-```
-
-`/b/<key>` 行为：
-
-- 只允许 `GET` / `HEAD`；其它方法返回 `405`。
-- 不查 D1、不调用签发 API、不需要管理员鉴权。
-- `<key>` 允许没有扩展名；Worker 不根据扩展名猜测或设置 `Content-Type`。
-- `Content-Type` 完全来自对象上传时写入的 B2/S3 metadata；Worker 只透传白名单中的 `content-type`。
-- 普通 GET 成功响应会写入 Cloudflare 边缘缓存；Range 和 HEAD 仍绕过缓存。
-- `<key>` 使用同一套对象 key 安全规则：拒绝空段、`.`、`..`、控制字符和反斜杠；`%2e%2e` 这类编码内容按字面字符处理，不作为目录穿越。
-- 实际回源 key 永远是 `<B_PREFIX><key>`；非法 prefix 或桶配置会 fail-closed，不会回退到其它桶或真实路径。
-
-### 章节正文反代 `/chapter-content/`
-
-`GET|HEAD /chapter-content/<key>` 将完整 URL 路径作为同名 B2 对象 key 签名回源。该路径不查 D1、不接受任意前缀，也不会回退到 `/b/` 的图片凭证。生产环境应让 `CHAPTER_CONTENT_BUCKET_ID` 指向 `BUCKETS` 中仅允许读取 `chapter-content/` 的独立 application key。
-
-普通 GET 成功响应写入 Cloudflare 边缘缓存，Range 和 HEAD 绕过缓存。腾讯云 EO 可把 `s.514996.xyz` 设为源站并保持路径不变；客户端访问 `https://s.o7n.cn/chapter-content/...` 时仍由本 Worker 生成 B2 签名。
-
-### 整书交付反代 `/book-export/`
-
-`GET|HEAD /book-export/<key>` 将完整 URL 路径作为同名 B2 对象 key 签名回源。路由只接受 `book-export/` 固定前缀，并通过 `BOOK_EXPORT_KEY_ID`、`BOOK_EXPORT_APPLICATION_KEY` 使用独立只读凭证；配置缺失时 fail-closed。
-
-普通 GET 成功响应写入 Cloudflare 边缘缓存，Range 和 HEAD 绕过缓存。腾讯云 EO 保持路径不变时，`https://s.o7n.cn/book-export/...` 与 `https://s.514996.xyz/book-export/...` 读取同一对象。
+所有非空路径都保持原样；例如 `/b/foo.jpg`、`/chapter-content/v1/a.parquet`、`/book-export/v1/a.7z` 分别读取 B2 的同名 key，不做前缀改写。根路径 `/` 没有对象 key，因此返回 `404`。
 
 ## 测试
 

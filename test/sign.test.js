@@ -4,7 +4,7 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from 'cloudflare:test'
-import worker from '../index.js'
+import worker from '../src/shortlink.js'
 import { expect, test, beforeEach, describe } from 'vitest'
 import { resetDb } from './helpers.js'
 

@@ -13,8 +13,13 @@ jobs:
       # See https://github.com/cloudflare/wrangler-action/issues/390
       - name: Install Wrangler v4
         run: npm install --save-dev wrangler@4
-      - name: Dry Run
+      - name: Dry Run (shortlink)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: deploy --dry-run
+      - name: Dry Run (mapper)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy --dry-run -c wrangler.mapper.toml

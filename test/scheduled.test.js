@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test'
 import { expect, test, beforeEach } from 'vitest'
-import { cleanupExpired } from '../index.js'
+import { cleanupExpired } from '../src/shortlink.js'
 import { resetDb, insertLink, FUTURE, PAST } from './helpers.js'
 
 beforeEach(resetDb)

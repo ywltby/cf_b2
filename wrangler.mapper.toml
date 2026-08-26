@@ -1,0 +1,17 @@
+name = "cf-b2-mapper"
+main = "src/mapper.js"
+# Keep both Workers on the same runtime behavior during this refactor.
+compatibility_date = "2024-09-01"
+workers_dev = false
+routes = [{ pattern = "b2.2cf2b2.kdns.fr", custom_domain = true }]
+
+[vars]
+CACHE_TTL_SECONDS = "0"
+B_BUCKET_ID = "1145141919810"
+
+# Secret (set via `wrangler secret bulk .dev.vars.mapper`, do NOT put its value here):
+#   BUCKETS
+
+[observability.logs]
+enabled = true
+invocation_logs = true

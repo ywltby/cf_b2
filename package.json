@@ -4,14 +4,16 @@
   "name": "cloudflare-b2",
   "version": "2.0.0",
   "description": "D1-backed short-link CDN gateway for private S3-compatible buckets via a Cloudflare Worker",
-  "main": "index.js",
+  "main": "src/shortlink.js",
   "scripts": {
     "pretest": "node scripts/check-no-buffering.mjs && node scripts/check-download-filename.mjs",
     "test": "cross-env HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= NO_PROXY=* vitest run",
     "test:watch": "cross-env HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= NO_PROXY=* vitest",
     "format": "prettier --write '**/*.{js,css,json,md}'",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "deploy:mapper": "wrangler deploy -c wrangler.mapper.toml",
+    "dev": "wrangler dev",
+    "dev:mapper": "wrangler dev -c wrangler.mapper.toml --env-file .dev.vars.mapper"
   },
   "author": "Pat Patterson <pat@backblaze.com>",
   "license": "MIT",
